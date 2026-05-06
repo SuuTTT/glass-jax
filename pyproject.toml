@@ -1,0 +1,31 @@
+[project]
+name = "glass-jax"
+version = "0.1.0"
+description = "Graph-based Latent Abstraction & Structural Segmentation in JAX"
+authors = [
+    { name = "Your Name", email = "your.email@example.com" }
+]
+dependencies = [
+    "jax",
+    "jaxlib",
+    "jraph",
+    "ott-jax",
+    "numpy",
+]
+readme = "README.md"
+requires-python = ">=3.9"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "infomap",
+    "networkx",
+    "matplotlib",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
