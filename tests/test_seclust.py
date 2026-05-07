@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from glass.cluster_idea_lib import (
+from glass.seclust import (
     StructuralEntropyMoveEnv,
     build_structural_entropy_dataset,
     cem_node_move_search,

@@ -33,7 +33,7 @@ def run_official_sep_coding_tree(adj: np.ndarray, k: int = 2) -> ClusteringResul
 
 
 def compare_on_dataset(dataset, exact_max_nodes: int = 9) -> list[dict[str, object]]:
-    """Compare cluster-idea-lib against SEP on exact-labeled small graphs."""
+    """Compare SEClust against SEP on exact-labeled small graphs."""
 
     rows = []
     for item in dataset:

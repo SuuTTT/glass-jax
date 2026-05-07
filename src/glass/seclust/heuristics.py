@@ -13,7 +13,7 @@ from .exact import exact_minimize_structural_entropy
 
 @dataclass(frozen=True)
 class ClusteringResult:
-    """Output from a cluster-idea-lib optimizer."""
+    """Output from a SEClust optimizer."""
 
     entropy: float
     labels: np.ndarray

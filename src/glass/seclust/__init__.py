@@ -1,4 +1,4 @@
-"""Cluster Idea Lib: non-differentiable structural entropy clustering."""
+"""SEClust: non-differentiable structural entropy clustering."""
 
 from .benchmark_sep import compare_on_dataset, run_official_sep_coding_tree
 from .datasets import (

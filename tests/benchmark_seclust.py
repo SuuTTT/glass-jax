@@ -1,4 +1,4 @@
-"""Benchmark cluster_idea_lib on exact-labeled and planted graph datasets."""
+"""Benchmark seclust on exact-labeled and planted graph datasets."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from glass.cluster_idea_lib import (
+from glass.seclust import (
     build_structural_entropy_dataset,
     cem_node_move_search,
     cluster_graph,
@@ -147,11 +147,11 @@ def get_cases() -> list[BenchmarkCase]:
 
 def run_algorithm(name: str, adj: np.ndarray, reference_k: int, seed: int):
     start = time.time()
-    if name == "ClusterIdea-Auto":
+    if name == "SEClust-Auto":
         labels = cluster_graph(adj, mode="auto", exact_max_nodes=9, heuristic_starts=6, seed=seed).labels
-    elif name == "ClusterIdea-Heuristic":
+    elif name == "SEClust-Heuristic":
         labels = multistart_se_heuristic(adj, starts=4, max_passes=10, seed=seed).labels
-    elif name == "ClusterIdea-CEM":
+    elif name == "SEClust-CEM":
         labels = cem_node_move_search(adj, episodes=4, horizon=min(48, 2 * adj.shape[0]), seed=seed).labels
     elif name == "Official-SEP":
         labels = run_official_sep_coding_tree(adj, k=max(2, reference_k)).labels
@@ -195,7 +195,7 @@ def markdown_table(rows: list[dict[str, object]]) -> str:
 
 
 def benchmark(seed: int = 42) -> list[dict[str, object]]:
-    algorithms = ["ClusterIdea-Auto", "ClusterIdea-Heuristic", "ClusterIdea-CEM", "Official-SEP"]
+    algorithms = ["SEClust-Auto", "SEClust-Heuristic", "SEClust-CEM", "Official-SEP"]
     rows: list[dict[str, object]] = []
     for case in get_cases():
         reference_k = int(len(np.unique(case.reference_labels)))
@@ -243,8 +243,8 @@ def benchmark(seed: int = 42) -> list[dict[str, object]]:
 def write_artifacts(rows: list[dict[str, object]]) -> Path:
     out_dir = Path("docs/experimental_reports")
     out_dir.mkdir(parents=True, exist_ok=True)
-    json_path = out_dir / "cluster_idea_lib_benchmark_20260507.json"
-    report_path = out_dir / "cluster_idea_lib_benchmark_20260507.md"
+    json_path = out_dir / "seclust_benchmark_20260507.json"
+    report_path = out_dir / "seclust_benchmark_20260507.md"
 
     serializable = []
     for row in rows:
@@ -258,25 +258,25 @@ def write_artifacts(rows: list[dict[str, object]]) -> Path:
 
     exact_rows = [row for row in rows if row["reference_kind"] == "global optimum"]
     planted_rows = [row for row in rows if row["reference_kind"] == "planted"]
-    auto_rows = [row for row in rows if row["algorithm"] == "ClusterIdea-Auto" and row["status"] == "ok"]
+    auto_rows = [row for row in rows if row["algorithm"] == "SEClust-Auto" and row["status"] == "ok"]
     sep_rows = [row for row in rows if row["algorithm"] == "Official-SEP" and row["status"] == "ok"]
     exact_auto_hits = sum(abs(float(row["gap"])) < 1e-10 for row in auto_rows if row["reference_kind"] == "global optimum")
     sep_beats = 0
     sep_total = 0
     by_dataset_algo = {(row["dataset"], row["algorithm"]): row for row in rows}
     for row in sep_rows:
-        ours = by_dataset_algo.get((row["dataset"], "ClusterIdea-Auto"))
+        ours = by_dataset_algo.get((row["dataset"], "SEClust-Auto"))
         if ours is not None and ours["status"] == "ok":
             sep_total += 1
             sep_beats += float(ours["se"]) <= float(row["se"]) + 1e-12
 
-    report = f"""# Cluster Idea Lib Benchmark: Non-Differentiable Structural Entropy Minimization
+    report = f"""# SEClust Benchmark: Non-Differentiable Structural Entropy Minimization
 
 **Date:** {date.today().strftime("%B %-d, %Y")}  
-**Project:** glass-jax / `glass.cluster_idea_lib`
+**Project:** glass-jax / `glass.seclust`
 
 ## 1. Abstract
-This experiment evaluates `cluster_idea_lib`, a NumPy-based, non-differentiable structural entropy clustering library. The benchmark mirrors the script-style workflow in `tests/benchmark_full.py`: each dataset is loaded, each algorithm is run, clustering metrics are computed, a markdown summary is printed, and result artifacts are written under `docs/experimental_reports/`.
+This experiment evaluates `seclust`, a NumPy-based, non-differentiable structural entropy clustering library. The benchmark mirrors the script-style workflow in `tests/benchmark_full.py`: each dataset is loaded, each algorithm is run, clustering metrics are computed, a markdown summary is printed, and result artifacts are written under `docs/experimental_reports/`.
 
 The core question is whether the high-level `cluster_graph()` API can recover globally minimum 2D structural entropy partitions on exact-labeled small graphs, and whether its heuristic path remains competitive with the official SEP coding tree baseline on larger planted graphs.
 
@@ -286,9 +286,9 @@ The core question is whether the high-level `cluster_graph()` API can recover gl
 - **Planted graphs:** 3 larger synthetic graphs with known planted structure: two-clique bridge, ring of triangle modules, and a 3-block SBM.
 
 ### 2.2 Algorithms
-- **ClusterIdea-Auto:** `cluster_graph(mode="auto")`; exact exhaustive search for N <= 9 and multistart local-search heuristic otherwise.
-- **ClusterIdea-Heuristic:** direct multistart local node-move search.
-- **ClusterIdea-CEM:** lightweight cross-entropy-method node-move policy search, included as the ML/RL exploration hook.
+- **SEClust-Auto:** `cluster_graph(mode="auto")`; exact exhaustive search for N <= 9 and multistart local-search heuristic otherwise.
+- **SEClust-Heuristic:** direct multistart local node-move search.
+- **SEClust-CEM:** lightweight cross-entropy-method node-move policy search, included as the ML/RL exploration hook.
 - **Official-SEP:** wrapper around `official_baselines/SEP/SEPN/codingTree.py`.
 
 ### 2.3 Metrics
@@ -305,8 +305,8 @@ The core question is whether the high-level `cluster_graph()` API can recover gl
 {markdown_table(planted_rows)}
 
 ## 4. Summary
-- `ClusterIdea-Auto` matched the exact global optimum on **{exact_auto_hits}/{len([row for row in auto_rows if row["reference_kind"] == "global optimum"])}** exact-labeled graphs.
-- `ClusterIdea-Auto` was no worse than Official-SEP by structural entropy on **{sep_beats}/{sep_total}** comparable runs.
+- `SEClust-Auto` matched the exact global optimum on **{exact_auto_hits}/{len([row for row in auto_rows if row["reference_kind"] == "global optimum"])}** exact-labeled graphs.
+- `SEClust-Auto` was no worse than Official-SEP by structural entropy on **{sep_beats}/{sep_total}** comparable runs.
 - The exact path is intentionally exponential; it is appropriate for labeling small graphs and producing ground-truth supervision.
 - The heuristic path scales to larger graphs, but the first implementation recomputes full SE after each proposal. This is correct and simple, but the next performance step is an incremental delta scorer.
 - The CEM/RL scaffold is wired and measurable, but it is not yet competitive with deterministic SE local search. It is best treated as an experiment harness for learned action policies.

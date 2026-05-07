@@ -2,7 +2,7 @@
   {
     "dataset": "Exact/bridge_4_4_w1",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-Auto",
+    "algorithm": "SEClust-Auto",
     "n": 8,
     "k": 2,
     "reference_entropy": 2.025473474066354,
@@ -10,13 +10,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 0.4337036609649658,
+    "seconds": 0.4114420413970947,
     "status": "ok"
   },
   {
     "dataset": "Exact/bridge_4_4_w1",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-Heuristic",
+    "algorithm": "SEClust-Heuristic",
     "n": 8,
     "k": 2,
     "reference_entropy": 2.025473474066354,
@@ -24,13 +24,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 0.03332185745239258,
+    "seconds": 0.033072471618652344,
     "status": "ok"
   },
   {
     "dataset": "Exact/bridge_4_4_w1",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-CEM",
+    "algorithm": "SEClust-CEM",
     "n": 8,
     "k": 4,
     "reference_entropy": 2.025473474066354,
@@ -38,7 +38,7 @@
     "gap": 0.4027782936624096,
     "ari": 0.29213483146067415,
     "nmi": 0.5162375532111046,
-    "seconds": 0.11707377433776855,
+    "seconds": 0.11361980438232422,
     "status": "ok"
   },
   {
@@ -52,13 +52,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 0.001636505126953125,
+    "seconds": 0.0018765926361083984,
     "status": "ok"
   },
   {
     "dataset": "Exact/bridge_3_5_w2",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-Auto",
+    "algorithm": "SEClust-Auto",
     "n": 8,
     "k": 3,
     "reference_entropy": 2.1092360399442467,
@@ -66,13 +66,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 0.9999999999999998,
-    "seconds": 0.496201753616333,
+    "seconds": 0.4199845790863037,
     "status": "ok"
   },
   {
     "dataset": "Exact/bridge_3_5_w2",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-Heuristic",
+    "algorithm": "SEClust-Heuristic",
     "n": 8,
     "k": 3,
     "reference_entropy": 2.1092360399442467,
@@ -80,13 +80,13 @@
     "gap": 0.0,
     "ari": 0.42857142857142855,
     "nmi": 0.6193113011326309,
-    "seconds": 0.043680667877197266,
+    "seconds": 0.042200326919555664,
     "status": "ok"
   },
   {
     "dataset": "Exact/bridge_3_5_w2",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-CEM",
+    "algorithm": "SEClust-CEM",
     "n": 8,
     "k": 4,
     "reference_entropy": 2.1092360399442467,
@@ -94,7 +94,7 @@
     "gap": 0.1309969394363697,
     "ari": 0.7894736842105263,
     "nmi": 0.900672292060331,
-    "seconds": 0.16434359550476074,
+    "seconds": 0.1225748062133789,
     "status": "ok"
   },
   {
@@ -108,13 +108,13 @@
     "gap": 0.08681241612382129,
     "ari": 0.5555555555555556,
     "nmi": 0.7587783932316692,
-    "seconds": 0.0003712177276611328,
+    "seconds": 0.0003573894500732422,
     "status": "ok"
   },
   {
     "dataset": "Exact/ring_triangles_3",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-Auto",
+    "algorithm": "SEClust-Auto",
     "n": 9,
     "k": 3,
     "reference_entropy": 1.8038294972410818,
@@ -122,13 +122,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 2.5242526531219482,
+    "seconds": 2.473471164703369,
     "status": "ok"
   },
   {
     "dataset": "Exact/ring_triangles_3",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-Heuristic",
+    "algorithm": "SEClust-Heuristic",
     "n": 9,
     "k": 3,
     "reference_entropy": 1.8038294972410818,
@@ -136,13 +136,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 0.1305379867553711,
+    "seconds": 0.05792379379272461,
     "status": "ok"
   },
   {
     "dataset": "Exact/ring_triangles_3",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-CEM",
+    "algorithm": "SEClust-CEM",
     "n": 9,
     "k": 6,
     "reference_entropy": 1.8038294972410818,
@@ -150,7 +150,7 @@
     "gap": 0.9204596508640213,
     "ari": 0.18181818181818182,
     "nmi": 0.6387382037175945,
-    "seconds": 0.16675853729248047,
+    "seconds": 0.15598773956298828,
     "status": "ok"
   },
   {
@@ -164,13 +164,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 0.0004181861877441406,
+    "seconds": 0.0004229545593261719,
     "status": "ok"
   },
   {
     "dataset": "Exact/sbm_333_seed1",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-Auto",
+    "algorithm": "SEClust-Auto",
     "n": 9,
     "k": 3,
     "reference_entropy": 1.630308138063227,
@@ -178,13 +178,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 2.3517239093780518,
+    "seconds": 2.348492383956909,
     "status": "ok"
   },
   {
     "dataset": "Exact/sbm_333_seed1",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-Heuristic",
+    "algorithm": "SEClust-Heuristic",
     "n": 9,
     "k": 4,
     "reference_entropy": 1.630308138063227,
@@ -192,13 +192,13 @@
     "gap": 0.0,
     "ari": 0.771186440677966,
     "nmi": 0.8946186330761927,
-    "seconds": 0.044501304626464844,
+    "seconds": 0.07204961776733398,
     "status": "ok"
   },
   {
     "dataset": "Exact/sbm_333_seed1",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-CEM",
+    "algorithm": "SEClust-CEM",
     "n": 9,
     "k": 7,
     "reference_entropy": 1.630308138063227,
@@ -206,7 +206,7 @@
     "gap": 0.7297947135860259,
     "ari": 0.26530612244897955,
     "nmi": 0.7192211210196009,
-    "seconds": 0.1689896583557129,
+    "seconds": 0.16395902633666992,
     "status": "ok"
   },
   {
@@ -220,13 +220,13 @@
     "gap": 0.34451976967125475,
     "ari": 0.4295774647887324,
     "nmi": 0.6877369123837589,
-    "seconds": 0.00031256675720214844,
+    "seconds": 0.00033283233642578125,
     "status": "ok"
   },
   {
     "dataset": "Exact/sbm_234_seed2",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-Auto",
+    "algorithm": "SEClust-Auto",
     "n": 9,
     "k": 3,
     "reference_entropy": 2.0319951505831693,
@@ -234,13 +234,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 2.6833133697509766,
+    "seconds": 2.6187996864318848,
     "status": "ok"
   },
   {
     "dataset": "Exact/sbm_234_seed2",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-Heuristic",
+    "algorithm": "SEClust-Heuristic",
     "n": 9,
     "k": 3,
     "reference_entropy": 2.0319951505831693,
@@ -248,13 +248,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 0.05627083778381348,
+    "seconds": 0.0517425537109375,
     "status": "ok"
   },
   {
     "dataset": "Exact/sbm_234_seed2",
     "reference_kind": "global optimum",
-    "algorithm": "ClusterIdea-CEM",
+    "algorithm": "SEClust-CEM",
     "n": 9,
     "k": 4,
     "reference_entropy": 2.0319951505831693,
@@ -262,7 +262,7 @@
     "gap": 0.4409251650281334,
     "ari": 0.04,
     "nmi": 0.4318400214736757,
-    "seconds": 0.1541731357574463,
+    "seconds": 0.15824151039123535,
     "status": "ok"
   },
   {
@@ -276,13 +276,13 @@
     "gap": 0.16803751847279713,
     "ari": 0.35294117647058826,
     "nmi": 0.5318068284955991,
-    "seconds": 0.0003578662872314453,
+    "seconds": 0.00040411949157714844,
     "status": "ok"
   },
   {
     "dataset": "Bridge(10+10, w=1)",
     "reference_kind": "planted",
-    "algorithm": "ClusterIdea-Auto",
+    "algorithm": "SEClust-Auto",
     "n": 20,
     "k": 2,
     "reference_entropy": 3.32553058805743,
@@ -290,13 +290,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 0.7152643203735352,
+    "seconds": 0.7102279663085938,
     "status": "ok"
   },
   {
     "dataset": "Bridge(10+10, w=1)",
     "reference_kind": "planted",
-    "algorithm": "ClusterIdea-Heuristic",
+    "algorithm": "SEClust-Heuristic",
     "n": 20,
     "k": 2,
     "reference_entropy": 3.32553058805743,
@@ -304,13 +304,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 0.5814728736877441,
+    "seconds": 0.6368770599365234,
     "status": "ok"
   },
   {
     "dataset": "Bridge(10+10, w=1)",
     "reference_kind": "planted",
-    "algorithm": "ClusterIdea-CEM",
+    "algorithm": "SEClust-CEM",
     "n": 20,
     "k": 12,
     "reference_entropy": 3.32553058805743,
@@ -318,7 +318,7 @@
     "gap": 0.6955753257026336,
     "ari": 0.10575246949447996,
     "nmi": 0.4070622500807197,
-    "seconds": 1.5997648239135742,
+    "seconds": 1.5642428398132324,
     "status": "ok"
   },
   {
@@ -332,13 +332,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 0.001405954360961914,
+    "seconds": 0.0014386177062988281,
     "status": "ok"
   },
   {
     "dataset": "RingTriangles(6)",
     "reference_kind": "planted",
-    "algorithm": "ClusterIdea-Auto",
+    "algorithm": "SEClust-Auto",
     "n": 18,
     "k": 6,
     "reference_entropy": 1.9466866400982243,
@@ -346,13 +346,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 0.9999999999999999,
-    "seconds": 0.540910005569458,
+    "seconds": 0.6323051452636719,
     "status": "ok"
   },
   {
     "dataset": "RingTriangles(6)",
     "reference_kind": "planted",
-    "algorithm": "ClusterIdea-Heuristic",
+    "algorithm": "SEClust-Heuristic",
     "n": 18,
     "k": 6,
     "reference_entropy": 1.9466866400982243,
@@ -360,13 +360,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 0.9999999999999999,
-    "seconds": 0.5334944725036621,
+    "seconds": 0.5369663238525391,
     "status": "ok"
   },
   {
     "dataset": "RingTriangles(6)",
     "reference_kind": "planted",
-    "algorithm": "ClusterIdea-CEM",
+    "algorithm": "SEClust-CEM",
     "n": 18,
     "k": 10,
     "reference_entropy": 1.9466866400982243,
@@ -374,7 +374,7 @@
     "gap": 1.6404151978217492,
     "ari": 0.2336065573770492,
     "nmi": 0.6996500225867444,
-    "seconds": 1.1343953609466553,
+    "seconds": 0.9514129161834717,
     "status": "ok"
   },
   {
@@ -388,13 +388,13 @@
     "gap": 1.349051190407509,
     "ari": 0.2119205298013245,
     "nmi": 0.5242524223457238,
-    "seconds": 0.0006628036499023438,
+    "seconds": 0.0006771087646484375,
     "status": "ok"
   },
   {
     "dataset": "SBM(24, 3x8)",
     "reference_kind": "planted",
-    "algorithm": "ClusterIdea-Auto",
+    "algorithm": "SEClust-Auto",
     "n": 24,
     "k": 3,
     "reference_entropy": 3.1543562454226723,
@@ -402,13 +402,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 1.6547932624816895,
+    "seconds": 1.8215093612670898,
     "status": "ok"
   },
   {
     "dataset": "SBM(24, 3x8)",
     "reference_kind": "planted",
-    "algorithm": "ClusterIdea-Heuristic",
+    "algorithm": "SEClust-Heuristic",
     "n": 24,
     "k": 3,
     "reference_entropy": 3.1543562454226723,
@@ -416,13 +416,13 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 1.435941457748413,
+    "seconds": 1.4496634006500244,
     "status": "ok"
   },
   {
     "dataset": "SBM(24, 3x8)",
     "reference_kind": "planted",
-    "algorithm": "ClusterIdea-CEM",
+    "algorithm": "SEClust-CEM",
     "n": 24,
     "k": 12,
     "reference_entropy": 3.1543562454226723,
@@ -430,7 +430,7 @@
     "gap": 1.0853563735817389,
     "ari": 0.1212989493791786,
     "nmi": 0.46362770157416583,
-    "seconds": 2.6893765926361084,
+    "seconds": 2.7369043827056885,
     "status": "ok"
   },
   {
@@ -444,7 +444,7 @@
     "gap": 0.0,
     "ari": 1.0,
     "nmi": 1.0,
-    "seconds": 0.0016188621520996094,
+    "seconds": 0.0016644001007080078,
     "status": "ok"
   }
 ]
