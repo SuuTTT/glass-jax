@@ -29,41 +29,41 @@ The core question is whether the high-level `cluster_graph()` API can recover gl
 ### 3.1 Exact-Labeled Graphs
 | Dataset | Reference | Algorithm | K | SE | Gap | ARI | NMI | Time(s) | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Exact/bridge_4_4_w1 | global optimum | SEClust-Auto | 2 | 2.0255 | 0.0000 | 1.0000 | 1.0000 | 0.411 | ok |
-| Exact/bridge_4_4_w1 | global optimum | SEClust-Heuristic | 2 | 2.0255 | 0.0000 | 1.0000 | 1.0000 | 0.033 | ok |
-| Exact/bridge_4_4_w1 | global optimum | SEClust-CEM | 4 | 2.4283 | 0.4028 | 0.2921 | 0.5162 | 0.114 | ok |
+| Exact/bridge_4_4_w1 | global optimum | SEClust-Auto | 2 | 2.0255 | 0.0000 | 1.0000 | 1.0000 | 0.477 | ok |
+| Exact/bridge_4_4_w1 | global optimum | SEClust-Heuristic | 2 | 2.0255 | 0.0000 | 1.0000 | 1.0000 | 0.006 | ok |
+| Exact/bridge_4_4_w1 | global optimum | SEClust-CEM | 4 | 2.4283 | 0.4028 | 0.2921 | 0.5162 | 0.124 | ok |
 | Exact/bridge_4_4_w1 | global optimum | Official-SEP | 2 | 2.0255 | 0.0000 | 1.0000 | 1.0000 | 0.002 | ok |
-| Exact/bridge_3_5_w2 | global optimum | SEClust-Auto | 3 | 2.1092 | 0.0000 | 1.0000 | 1.0000 | 0.420 | ok |
-| Exact/bridge_3_5_w2 | global optimum | SEClust-Heuristic | 3 | 2.1092 | 0.0000 | 0.4286 | 0.6193 | 0.042 | ok |
-| Exact/bridge_3_5_w2 | global optimum | SEClust-CEM | 4 | 2.2402 | 0.1310 | 0.7895 | 0.9007 | 0.123 | ok |
-| Exact/bridge_3_5_w2 | global optimum | Official-SEP | 2 | 2.1960 | 0.0868 | 0.5556 | 0.7588 | 0.000 | ok |
-| Exact/ring_triangles_3 | global optimum | SEClust-Auto | 3 | 1.8038 | 0.0000 | 1.0000 | 1.0000 | 2.473 | ok |
-| Exact/ring_triangles_3 | global optimum | SEClust-Heuristic | 3 | 1.8038 | 0.0000 | 1.0000 | 1.0000 | 0.058 | ok |
-| Exact/ring_triangles_3 | global optimum | SEClust-CEM | 6 | 2.7243 | 0.9205 | 0.1818 | 0.6387 | 0.156 | ok |
+| Exact/bridge_3_5_w2 | global optimum | SEClust-Auto | 3 | 2.1092 | 0.0000 | 1.0000 | 1.0000 | 0.460 | ok |
+| Exact/bridge_3_5_w2 | global optimum | SEClust-Heuristic | 3 | 2.1092 | 0.0000 | 0.4286 | 0.6193 | 0.005 | ok |
+| Exact/bridge_3_5_w2 | global optimum | SEClust-CEM | 4 | 2.2402 | 0.1310 | 0.7895 | 0.9007 | 0.149 | ok |
+| Exact/bridge_3_5_w2 | global optimum | Official-SEP | 2 | 2.1960 | 0.0868 | 0.5556 | 0.7588 | 0.001 | ok |
+| Exact/ring_triangles_3 | global optimum | SEClust-Auto | 3 | 1.8038 | 0.0000 | 1.0000 | 1.0000 | 2.920 | ok |
+| Exact/ring_triangles_3 | global optimum | SEClust-Heuristic | 3 | 1.8038 | 0.0000 | 1.0000 | 1.0000 | 0.005 | ok |
+| Exact/ring_triangles_3 | global optimum | SEClust-CEM | 6 | 2.7243 | 0.9205 | 0.1818 | 0.6387 | 0.202 | ok |
 | Exact/ring_triangles_3 | global optimum | Official-SEP | 3 | 1.8038 | 0.0000 | 1.0000 | 1.0000 | 0.000 | ok |
-| Exact/sbm_333_seed1 | global optimum | SEClust-Auto | 3 | 1.6303 | 0.0000 | 1.0000 | 1.0000 | 2.348 | ok |
-| Exact/sbm_333_seed1 | global optimum | SEClust-Heuristic | 4 | 1.6303 | 0.0000 | 0.7712 | 0.8946 | 0.072 | ok |
-| Exact/sbm_333_seed1 | global optimum | SEClust-CEM | 7 | 2.3601 | 0.7298 | 0.2653 | 0.7192 | 0.164 | ok |
+| Exact/sbm_333_seed1 | global optimum | SEClust-Auto | 3 | 1.6303 | 0.0000 | 1.0000 | 1.0000 | 3.363 | ok |
+| Exact/sbm_333_seed1 | global optimum | SEClust-Heuristic | 4 | 1.6303 | 0.0000 | 0.7712 | 0.8946 | 0.005 | ok |
+| Exact/sbm_333_seed1 | global optimum | SEClust-CEM | 7 | 2.3601 | 0.7298 | 0.2653 | 0.7192 | 0.175 | ok |
 | Exact/sbm_333_seed1 | global optimum | Official-SEP | 3 | 1.9748 | 0.3445 | 0.4296 | 0.6877 | 0.000 | ok |
-| Exact/sbm_234_seed2 | global optimum | SEClust-Auto | 3 | 2.0320 | 0.0000 | 1.0000 | 1.0000 | 2.619 | ok |
-| Exact/sbm_234_seed2 | global optimum | SEClust-Heuristic | 3 | 2.0320 | 0.0000 | 1.0000 | 1.0000 | 0.052 | ok |
-| Exact/sbm_234_seed2 | global optimum | SEClust-CEM | 4 | 2.4729 | 0.4409 | 0.0400 | 0.4318 | 0.158 | ok |
+| Exact/sbm_234_seed2 | global optimum | SEClust-Auto | 3 | 2.0320 | 0.0000 | 1.0000 | 1.0000 | 2.918 | ok |
+| Exact/sbm_234_seed2 | global optimum | SEClust-Heuristic | 3 | 2.0320 | 0.0000 | 1.0000 | 1.0000 | 0.004 | ok |
+| Exact/sbm_234_seed2 | global optimum | SEClust-CEM | 4 | 2.4729 | 0.4409 | 0.0400 | 0.4318 | 0.170 | ok |
 | Exact/sbm_234_seed2 | global optimum | Official-SEP | 2 | 2.2000 | 0.1680 | 0.3529 | 0.5318 | 0.000 | ok |
 
 ### 3.2 Planted Larger Graphs
 | Dataset | Reference | Algorithm | K | SE | Gap | ARI | NMI | Time(s) | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Bridge(10+10, w=1) | planted | SEClust-Auto | 2 | 3.3255 | 0.0000 | 1.0000 | 1.0000 | 0.710 | ok |
-| Bridge(10+10, w=1) | planted | SEClust-Heuristic | 2 | 3.3255 | 0.0000 | 1.0000 | 1.0000 | 0.637 | ok |
-| Bridge(10+10, w=1) | planted | SEClust-CEM | 12 | 4.0211 | 0.6956 | 0.1058 | 0.4071 | 1.564 | ok |
+| Bridge(10+10, w=1) | planted | SEClust-Auto | 2 | 3.3255 | 0.0000 | 1.0000 | 1.0000 | 0.016 | ok |
+| Bridge(10+10, w=1) | planted | SEClust-Heuristic | 2 | 3.3255 | 0.0000 | 1.0000 | 1.0000 | 0.009 | ok |
+| Bridge(10+10, w=1) | planted | SEClust-CEM | 12 | 4.0211 | 0.6956 | 0.1058 | 0.4071 | 1.810 | ok |
 | Bridge(10+10, w=1) | planted | Official-SEP | 2 | 3.3255 | 0.0000 | 1.0000 | 1.0000 | 0.001 | ok |
-| RingTriangles(6) | planted | SEClust-Auto | 6 | 1.9467 | 0.0000 | 1.0000 | 1.0000 | 0.632 | ok |
-| RingTriangles(6) | planted | SEClust-Heuristic | 6 | 1.9467 | 0.0000 | 1.0000 | 1.0000 | 0.537 | ok |
-| RingTriangles(6) | planted | SEClust-CEM | 10 | 3.5871 | 1.6404 | 0.2336 | 0.6997 | 0.951 | ok |
+| RingTriangles(6) | planted | SEClust-Auto | 6 | 1.9467 | 0.0000 | 1.0000 | 1.0000 | 0.011 | ok |
+| RingTriangles(6) | planted | SEClust-Heuristic | 6 | 1.9467 | 0.0000 | 1.0000 | 1.0000 | 0.007 | ok |
+| RingTriangles(6) | planted | SEClust-CEM | 10 | 3.5871 | 1.6404 | 0.2336 | 0.6997 | 1.114 | ok |
 | RingTriangles(6) | planted | Official-SEP | 2 | 3.2957 | 1.3491 | 0.2119 | 0.5243 | 0.001 | ok |
-| SBM(24, 3x8) | planted | SEClust-Auto | 3 | 3.1544 | 0.0000 | 1.0000 | 1.0000 | 1.822 | ok |
-| SBM(24, 3x8) | planted | SEClust-Heuristic | 3 | 3.1544 | 0.0000 | 1.0000 | 1.0000 | 1.450 | ok |
-| SBM(24, 3x8) | planted | SEClust-CEM | 12 | 4.2397 | 1.0854 | 0.1213 | 0.4636 | 2.737 | ok |
+| SBM(24, 3x8) | planted | SEClust-Auto | 3 | 3.1544 | 0.0000 | 1.0000 | 1.0000 | 0.024 | ok |
+| SBM(24, 3x8) | planted | SEClust-Heuristic | 3 | 3.1544 | 0.0000 | 1.0000 | 1.0000 | 0.018 | ok |
+| SBM(24, 3x8) | planted | SEClust-CEM | 12 | 4.2397 | 1.0854 | 0.1213 | 0.4636 | 3.032 | ok |
 | SBM(24, 3x8) | planted | Official-SEP | 3 | 3.1544 | 0.0000 | 1.0000 | 1.0000 | 0.002 | ok |
 
 ## 4. Summary

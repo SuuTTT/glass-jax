@@ -25,6 +25,19 @@ from .heuristics import (
     local_move_se_clustering,
     multistart_se_heuristic,
 )
+from .hierarchy import (
+    HierarchicalClusteringResult,
+    HierarchicalLevel,
+    hierarchical_se_clustering,
+    merge_hierarchy_levels,
+    select_hierarchy_level,
+)
+from .incremental import (
+    IncrementalSEState,
+    SparseGraph,
+    local_move_incremental,
+    multistart_incremental_se_heuristic,
+)
 from .rl import StructuralEntropyMoveEnv, cem_node_move_search
 
 __all__ = [
@@ -34,6 +47,10 @@ __all__ = [
     "StructuralEntropyGraph",
     "StructuralEntropyScorer",
     "StructuralEntropyMoveEnv",
+    "IncrementalSEState",
+    "HierarchicalClusteringResult",
+    "HierarchicalLevel",
+    "SparseGraph",
     "agglomerative_se_clustering",
     "build_structural_entropy_dataset",
     "canonicalize_labels",
@@ -42,14 +59,19 @@ __all__ = [
     "compare_on_dataset",
     "exact_minimize_structural_entropy",
     "iter_restricted_growth_strings",
+    "hierarchical_se_clustering",
     "label_graph",
     "labels_to_partition",
     "local_move_se_clustering",
+    "local_move_incremental",
     "multistart_se_heuristic",
+    "multistart_incremental_se_heuristic",
+    "merge_hierarchy_levels",
     "partition_to_labels",
     "ring_of_triangles",
     "run_official_sep_coding_tree",
     "seeded_sbm",
+    "select_hierarchy_level",
     "structural_entropy",
     "weighted_bridge_graph",
 ]

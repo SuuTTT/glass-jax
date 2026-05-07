@@ -9,6 +9,7 @@ import numpy as np
 
 from .entropy import canonicalize_labels, structural_entropy
 from .exact import exact_minimize_structural_entropy
+from .incremental import multistart_incremental_se_heuristic
 
 
 @dataclass(frozen=True)
@@ -104,8 +105,20 @@ def multistart_se_heuristic(
     starts: int = 16,
     max_passes: int = 50,
     seed: int = 0,
+    backend: Literal["incremental", "reference"] = "incremental",
 ) -> ClusteringResult:
-    """Run agglomerative plus random starts and keep the minimum SE partition."""
+    """Run multistart local search and keep the minimum SE partition."""
+
+    if backend == "incremental":
+        labels, entropy = multistart_incremental_se_heuristic(
+            adj,
+            starts=starts,
+            max_passes=max_passes,
+            seed=seed,
+        )
+        return ClusteringResult(entropy, labels, method="multistart-incremental-se")
+    if backend != "reference":
+        raise ValueError("backend must be 'incremental' or 'reference'")
 
     n_nodes = int(np.asarray(adj).shape[0])
     rng = np.random.default_rng(seed)
@@ -128,6 +141,7 @@ def cluster_graph(
     mode: Literal["auto", "exact", "heuristic"] = "auto",
     exact_max_nodes: int = 9,
     heuristic_starts: int = 24,
+    max_passes: int = 30,
     seed: int = 0,
 ) -> ClusteringResult:
     """High-level structural entropy clustering entry point."""
@@ -138,4 +152,4 @@ def cluster_graph(
         return ClusteringResult(exact.entropy, exact.labels, method="exact-rgs", exact=True)
     if mode not in {"auto", "heuristic"}:
         raise ValueError("mode must be 'auto', 'exact', or 'heuristic'")
-    return multistart_se_heuristic(adj, starts=heuristic_starts, seed=seed)
+    return multistart_se_heuristic(adj, starts=heuristic_starts, max_passes=max_passes, seed=seed)

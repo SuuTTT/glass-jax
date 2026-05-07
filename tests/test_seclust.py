@@ -4,13 +4,18 @@ import numpy as np
 import pytest
 
 from glass.seclust import (
+    IncrementalSEState,
+    SparseGraph,
     StructuralEntropyMoveEnv,
     build_structural_entropy_dataset,
     cem_node_move_search,
     cluster_graph,
     exact_minimize_structural_entropy,
+    hierarchical_se_clustering,
     iter_restricted_growth_strings,
+    local_move_incremental,
     multistart_se_heuristic,
+    multistart_incremental_se_heuristic,
     structural_entropy,
     weighted_bridge_graph,
 )
@@ -75,6 +80,53 @@ def test_heuristic_returns_valid_partition():
 
     assert result.labels.shape == (10,)
     assert np.min(result.labels) == 0
+    assert math.isclose(result.entropy, structural_entropy(adj, result.labels), abs_tol=1e-12)
+
+
+def test_incremental_move_delta_matches_full_rescore():
+    adj = weighted_bridge_graph(4, 4, bridge_weight=1.0)
+    graph = SparseGraph.from_adjacency(adj)
+    labels = np.array([0, 0, 1, 1, 2, 2, 3, 3], dtype=np.int32)
+    state = IncrementalSEState(graph, labels)
+
+    node = 2
+    target = 2
+    before = structural_entropy(adj, labels)
+    proposal = labels.copy()
+    proposal[node] = target
+    proposal = np.array([0, 0, 2, 1, 2, 2, 3, 3], dtype=np.int32)
+    expected_delta = structural_entropy(adj, proposal) - before
+
+    assert math.isclose(state.entropy, before, abs_tol=1e-12)
+    assert math.isclose(state.move_delta(node, target), expected_delta, abs_tol=1e-10)
+    state.apply_move(node, target)
+    assert math.isclose(state.entropy, structural_entropy(adj, state.canonical_labels()), abs_tol=1e-10)
+
+
+def test_incremental_local_search_returns_valid_partition():
+    adj = weighted_bridge_graph(6, 6, bridge_weight=1.0)
+    labels, entropy = local_move_incremental(adj, max_passes=3, seed=11)
+
+    assert labels.shape == (12,)
+    assert np.min(labels) == 0
+    assert math.isclose(entropy, structural_entropy(adj, labels), abs_tol=1e-12)
+
+
+def test_incremental_multistart_scales_smoke():
+    adj = weighted_bridge_graph(20, 20, bridge_weight=1.0)
+    labels, entropy = multistart_incremental_se_heuristic(adj, starts=3, max_passes=3, seed=5)
+
+    assert labels.shape == (40,)
+    assert math.isclose(entropy, structural_entropy(adj, labels), abs_tol=1e-12)
+
+
+def test_hierarchical_se_clustering_extracts_target_k():
+    adj = weighted_bridge_graph(6, 6, bridge_weight=1.0)
+    result = hierarchical_se_clustering(adj, target_clusters=2, starts=3, max_passes=3, seed=13)
+
+    assert result.labels.shape == (12,)
+    assert len(np.unique(result.labels)) == 2
+    assert result.levels[0].k >= result.levels[-1].k
     assert math.isclose(result.entropy, structural_entropy(adj, result.labels), abs_tol=1e-12)
 
 

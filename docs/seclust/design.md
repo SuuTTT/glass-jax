@@ -11,38 +11,62 @@ Public naming:
 - Exact algorithm label: `SEClust-Exact`
 - Default high-level algorithm label in benchmarks: `SEClust-Auto`
 - Heuristic algorithm label: `SEClust-Heuristic`
+- Hierarchical algorithm label: `SEClust-Tree`
 - ML/RL exploration label: `SEClust-CEM`
 
 ## Problem
-Given a weighted, undirected graph `G = (V, E)`, find a hard node partition that minimizes two-dimensional structural entropy:
+Given a weighted, undirected graph `G = (V, E, w)`, find a hard node partition `P = {C_1, ..., C_k}` that minimizes two-dimensional structural entropy. SEClust is intentionally non-differentiable: it optimizes hard partitions directly rather than soft assignment logits.
+
+Inputs:
+- `A in R^{n x n}`: non-negative weighted adjacency matrix.
+- `A` is symmetrized internally by `0.5 * (A + A.T)`.
+- self-loops are removed for scoring.
+
+Outputs:
+- `labels in {0, ..., k-1}^n`: canonical hard cluster ids.
+- `entropy`: hard two-dimensional structural entropy.
+- `method`: exact or heuristic method name.
+
+## Formulation
+Let:
+- `d_v = sum_u A[v, u]` be weighted degree.
+- `vol(G) = sum_v d_v = 2m` be graph volume.
+- `vol(C) = sum_{v in C} d_v` be cluster volume.
+- `in(C) = sum_{u in C, v in C} A[u, v]` be twice the internal edge weight for undirected graphs.
+- `g_C = vol(C) - in(C)` be the cut volume leaving cluster `C`.
+
+The hard two-dimensional structural entropy objective is:
 
 ```text
-H(P) = -sum_C g_C / vol(G) log2(vol(C) / vol(G))
-       -sum_C sum_{v in C} d_v / vol(G) log2(d_v / vol(C))
+H_2(P) =
+  - sum_{C in P} (g_C / vol(G)) log2(vol(C) / vol(G))
+  - sum_{C in P} sum_{v in C} (d_v / vol(G)) log2(d_v / vol(C))
+```
+
+The first term penalizes boundary uncertainty: clusters with large cuts contribute more. The second term measures uncertainty inside each cluster according to degree mass. Empty clusters do not exist in hard partitions, and isolated zero-volume clusters contribute zero.
+
+The implemented `structural_entropy(adj, labels)` matches `glass.objectives.structural_entropy.two_dimensional_structural_entropy()` for one-hot hard assignments when the JAX objective is called with `is_logits=False`.
+
+## High-Dimensional Structural Entropy
+The current `SEClust-Auto` optimizer returns a flat partition and optimizes `H_2`. This is not the full structural entropy story. The SEP baseline in `official_baselines/SEP/SEPN/codingTree.py` builds a coding tree, not only a flat label vector:
+
+- `CombineDelta()` scores binary merges while building a tree.
+- `CompressDelta()` scores compressing internal tree nodes.
+- `build_coding_tree(k)` constructs a coding tree up to height/depth `k`.
+- `leaf_up()` and `root_down()` refine the hierarchy by expanding lower-level modules or restructuring upper-level modules.
+
+In high-dimensional SE, a partition is represented by a rooted coding tree. Each non-root tree node `alpha` contributes:
+
+```text
+H_T(G) = - sum_{alpha != root} (g_alpha / vol(G)) log2(vol(alpha) / vol(parent(alpha)))
 ```
 
 where:
-- `C` is a cluster in partition `P`
-- `d_v` is node degree
-- `vol(C)` is the sum of degrees inside cluster `C`
-- `g_C` is the cut volume leaving `C`
-- `vol(G)` is total graph volume
+- `vol(alpha)` is the volume of the node's represented vertex subset.
+- `g_alpha` is the cut volume from that subset to the rest of the graph region represented at the relevant tree level.
+- `parent(alpha)` is the parent coding-tree node.
 
-The package is intentionally non-differentiable. It provides exact labels for small graphs, discrete heuristics for larger graphs, and an ML-friendly search environment for learned policies.
-
-## Goals
-- Provide a trusted hard structural entropy scorer.
-- Produce exact global minimum partitions for small graphs using exhaustive search.
-- Generate exact-labeled graph datasets for supervised or benchmark use.
-- Provide a high-level clustering API that automatically chooses exact or heuristic search.
-- Compare directly against `official_baselines/SEP/SEPN/codingTree.py`.
-- Keep the implementation dependency-light and usable without JAX.
-
-## Non-Goals
-- Replace differentiable objectives in `glass.objectives`.
-- Provide a production-scale Leiden implementation in the first version.
-- Guarantee global optimality on large graphs.
-- Train a full neural policy in-tree before the discrete baseline is stable.
+For a two-level tree, this reduces to the flat `H_2` objective. For deeper trees, the objective can encode coarse communities and subcommunities at different resolutions.
 
 ## Package Layout
 ```text
@@ -82,55 +106,303 @@ from glass.seclust import compare_on_dataset
 rows = compare_on_dataset(dataset)
 ```
 
-## Exact Search
-Exact search enumerates set partitions using restricted-growth strings. This visits each unlabeled partition once, avoiding duplicates from arbitrary cluster id permutations.
+## Algorithm 1: Exact Global Search
+Exact search enumerates every set partition using restricted-growth strings. A restricted-growth string is a canonical label sequence where:
 
-For `N` nodes, the search evaluates the Bell number `B_N` partitions:
+```text
+z_0 = 0
+z_i <= 1 + max(z_0, ..., z_{i-1})
+```
+
+This visits each unlabeled partition exactly once, avoiding duplicate partitions that differ only by cluster id permutation.
+
+Pseudocode:
+
+```text
+best_entropy = +inf
+best_labels = None
+
+for labels in restricted_growth_strings(n):
+    entropy = H_2(labels)
+    if entropy < best_entropy:
+        best_entropy = entropy
+        best_labels = labels
+
+return best_labels, best_entropy
+```
+
+For `n` nodes, exact search evaluates the Bell number `B_n` partitions:
 - `B_8 = 4,140`
 - `B_9 = 21,147`
 - `B_10 = 115,975`
+- `B_11 = 678,570`
 
-This is acceptable for small exact-label datasets and test fixtures. It is not intended as the large-graph path.
+This path is for ground-truth labels on small graphs, sanity checks, and supervised datasets. It is not the large-graph optimizer.
 
-## Heuristic Search
-The heuristic path has three pieces:
-- `agglomerative_se_clustering()`: starts from singleton clusters and greedily merges if SE improves.
-- `local_move_se_clustering()`: Leiden/Louvain-style node moves scored by hard SE.
-- `multistart_se_heuristic()`: runs deterministic and random starts, then keeps the lowest SE result.
+## Algorithm 2: Greedy Agglomerative SE
+`agglomerative_se_clustering()` starts from singleton clusters. At each step it tries every pairwise merge and accepts the merge with the largest structural entropy decrease. It stops when no merge improves SE or when an optional target cluster count is reached.
 
-The current implementation recomputes full structural entropy for each candidate move. This keeps the first version simple and auditable. The next performance upgrade should add an incremental delta scorer.
+Pseudocode:
 
-## ML/RL Hook
-`StructuralEntropyMoveEnv` exposes a small node-move environment:
-- state: current hard labels
+```text
+labels = [0, 1, ..., n-1]
+current = H_2(labels)
+
+while number_of_clusters > 1:
+    best_merge = None
+    best_entropy = current
+
+    for each pair of clusters (a, b):
+        proposal = merge(a, b)
+        entropy = H_2(proposal)
+        if entropy < best_entropy:
+            best_merge = (a, b)
+            best_entropy = entropy
+
+    if best_merge is None:
+        break
+
+    labels = apply(best_merge)
+    current = best_entropy
+
+return labels
+```
+
+This is simple and stable, but expensive because the current version recomputes full `H_2` for every candidate merge.
+
+## Algorithm 3: Local Node-Move SE
+`local_move_se_clustering()` is a Louvain/Leiden-style hard-partition optimizer. It repeatedly scans nodes in random order. For each node, it evaluates moving that node into each existing cluster plus one new singleton cluster. It accepts the move with the best entropy decrease.
+
+Pseudocode:
+
+```text
+labels = initial_partition
+current = H_2(labels)
+
+for pass in max_passes:
+    changed = false
+    for node in shuffled(nodes):
+        best_target = current_cluster(node)
+        best_entropy = current
+
+        for target in existing_clusters + new_cluster:
+            proposal = move(node, target)
+            entropy = H_2(proposal)
+            if entropy < best_entropy:
+                best_target = target
+                best_entropy = entropy
+
+        if best_target changed:
+            labels = move(node, best_target)
+            current = best_entropy
+            changed = true
+
+    if not changed:
+        break
+
+return labels
+```
+
+## Algorithm 4: Multistart Heuristic
+`multistart_se_heuristic()` combines deterministic and random starts, then keeps the partition with the lowest final SE. There are two backends:
+
+- `backend="incremental"`: scalable default. Starts from singleton, one-block, and random partitions. It avoids the expensive agglomerative seed.
+- `backend="reference"`: simple reference path. Starts from agglomerative, singleton, one-block, and random partitions. This is useful for small graphs and debugging but not for thousand-node benchmarks.
+
+Each start is refined by local node moves, and the best final SE is returned. This is the main large-graph path today.
+
+## Algorithm 5: CEM / RL Search Hook
+`StructuralEntropyMoveEnv` exposes node moves as a small environment:
+- state: current labels
 - action: `(node, target_cluster)`
-- reward: previous SE minus new SE
+- reward: `old_entropy - new_entropy`
 
-`cem_node_move_search()` is a minimal cross-entropy-method policy search. It is included to make ML optimization experiments concrete, not as the main production optimizer.
+`cem_node_move_search()` uses a lightweight cross-entropy-method policy over node and target-cluster choices. It is included to make ML optimization concrete, not as the production optimizer. The intended future use is to train a policy on exact-labeled small graphs, then transfer move proposals to larger graphs where exhaustive search is impossible.
+
+## Algorithm 6: Hierarchical SEClust
+Hierarchical SEClust is the resolution-control path. The first implementation is available as `hierarchical_se_clustering()` in `src/glass/seclust/hierarchy.py`.
+
+The current implementation is a practical high-level hierarchy:
+- run fast flat SEClust to get fine modules
+- greedily merge adjacent modules into coarser levels
+- select a level by `target_clusters` when available
+- expose all intermediate levels as a merge hierarchy
+
+This is not yet the full SEP-style high-dimensional coding tree, but it implements the most important product behavior: extracting a better coarse level from an over-partitioned flat SE solution.
+
+The next deeper implementation should follow the SEP coding-tree idea but use the new sparse incremental state for scalability.
+
+The algorithm should maintain a tree whose leaves are original nodes and whose internal nodes are modules. It should support:
+
+1. **Bottom-up merge phase**
+   Merge adjacent modules using an SE delta analogous to SEP's `CombineDelta()`.
+
+2. **Compression phase**
+   Remove or contract weak internal levels using a delta analogous to SEP's `CompressDelta()`.
+
+3. **Leaf-up refinement**
+   Inside a coarse module, rebuild a local subtree if doing so lowers high-dimensional SE.
+
+4. **Root-down refinement**
+   Repartition top-level modules if a higher-level restructuring lowers high-dimensional SE.
+
+5. **Flat extraction: first version implemented**
+   Return either:
+   - a chosen tree level,
+   - the best validation level,
+   - a cut selected by minimum description length improvement,
+   - or a user-requested target depth/cluster range.
+
+This should address the current flat-resolution issue by preserving a hierarchy instead of forcing the optimizer to choose one global flat granularity.
+
+## Current Time Complexity
+Let:
+- `n = |V|`
+- `m = |E|`
+- `k = number of current clusters`
+- `s = number of multistart seeds`
+- `p = local-move passes`
+
+Current full scoring:
+- Dense adjacency scorer: `H_2(P)` costs `O(n^2 + n)` because each cluster computes an induced adjacency sum through dense indexing.
+- Sparse future scorer should reduce this to `O(m + n)` for full scoring.
+
+Exact search:
+- `O(B_n * score_cost)`, where `B_n` is the Bell number.
+- Current dense cost: `O(B_n * n^2)`.
+
+Agglomerative search:
+- At a step with `k` clusters, candidate merges are `O(k^2)`.
+- Across all merge levels this is `O(n^3)` candidate evaluations.
+- Current dense cost: `O(n^5)` worst case if every candidate recomputes dense `H_2`.
+
+Local node-move search:
+- Each pass evaluates roughly `O(n * (k + 1))` moves.
+- Current dense cost: `O(p * n * k * n^2) = O(p * k * n^3)`.
+- In the worst fragmented case where `k = O(n)`, this becomes `O(p * n^4)`.
+
+Multistart:
+- Current cost is roughly `s` times local move plus one agglomerative seed.
+- This is why the first implementation handles small graphs correctly but does not yet scale to hundreds or thousands of nodes in the benchmark.
+
+## Incremental Structural Entropy Delta Scoring
+Incremental delta scoring means computing the entropy change caused by a local edit without recomputing the full objective for every cluster.
+
+For a node move `v: A -> B`, only two clusters change:
+- source cluster `A`
+- destination cluster `B`
+
+Every other cluster keeps the same `vol(C)`, `g_C`, and internal degree distribution term. Therefore:
+
+```text
+Delta H = H_after(A) + H_after(B) - H_before(A) - H_before(B)
+```
+
+The whole graph does not need to be rescored.
+
+To do this efficiently, maintain per-cluster state:
+- `vol[C]`
+- `cut[C] = g_C`
+- `sum_degree_log_degree[C] = sum_{v in C, d_v>0} d_v log2(d_v)`
+- node membership
+- edge weight from node `v` to each neighboring cluster, `w(v, C)`
+
+Cluster entropy can be rewritten as:
+
+```text
+H_C =
+  -(g_C / V) log2(vol_C / V)
+  - (1 / V) * [sum_{v in C} d_v log2(d_v) - vol_C log2(vol_C)]
+```
+
+where `V = vol(G)`.
+
+For moving node `v` from cluster `A` to cluster `B`:
+
+```text
+vol_A' = vol_A - d_v
+vol_B' = vol_B + d_v
+
+cut_A' = cut_A - d_v + 2 * w(v, A_without_v)
+cut_B' = cut_B + d_v - 2 * w(v, B)
+
+sum_degree_log_degree_A' = sum_degree_log_degree_A - d_v log2(d_v)
+sum_degree_log_degree_B' = sum_degree_log_degree_B + d_v log2(d_v)
+```
+
+Then `Delta H` is computed from the two old cluster terms and two new cluster terms. The cost becomes proportional to the degree of `v` if `w(v, cluster)` is computed from neighbors, or near `O(1)` if neighbor-cluster weights are cached and updated.
+
+This is the key scaling unlock. It changes local move evaluation from full graph rescoring to local state updates:
+- current local move candidate: `O(n^2)` dense full score
+- incremental local move candidate: `O(deg(v))` without cache or `O(1)` to score with cache
+
+## Scaling Plan for Thousands of Nodes
+SEClust can scale to thousands of nodes only if it stops using full dense rescoring in inner loops. The first scaling layer is now implemented in `src/glass/seclust/incremental.py`; the remaining items are the roadmap for making it more robust and faster.
+
+1. **Sparse graph representation: implemented**
+   Store adjacency as CSR-style neighbor lists. Avoid dense `n x n` scans for sparse graphs.
+
+2. **Incremental delta scorer: implemented for node moves**
+   Implement the per-cluster state described above. Use it for node moves and merge candidates.
+
+3. **Candidate pruning: implemented for node moves**
+   For node moves, consider only clusters present in the node's neighborhood plus its current cluster and one new singleton. This matches Louvain-style locality and changes candidates from `O(k)` to `O(number of neighboring clusters)`.
+
+4. **Priority queues for merges**
+   Maintain merge deltas only for adjacent clusters. Update affected neighboring cluster pairs after each merge.
+
+5. **Multilevel coarsening**
+   Run local moves, contract clusters into supernodes, repeat on the coarsened graph, then project labels back down and refine. This is the standard Louvain/Leiden scaling pattern.
+
+6. **Connectedness refinement**
+   Split disconnected clusters after local moves. Leiden improves Louvain partly by enforcing well-connected communities; SEClust should add the same guard.
+
+7. **Parallel starts and batched evaluation**
+   Run starts independently across CPU processes or JAX/NumPy vectorized batches where possible. Exact labels remain small-data supervision, not the large-graph path.
+
+8. **Learned proposal policy**
+   Use exact-labeled small graphs and heuristic traces to train a policy that proposes high-value moves. The policy should reduce candidate evaluations, not replace the SE objective.
+
+9. **Hierarchical high-dimensional SE: first high-level version implemented**
+   `SEClust-Tree` now builds a merge hierarchy over flat SEClust modules and supports target-`K` extraction. The remaining work is the full sparse coding-tree optimizer based on the high-dimensional SE formulation above.
+
+Target complexity after these changes:
+- local move pass: approximately `O(m)` to `O(m log n)` depending on caches
+- multilevel heuristic: near-linear in sparse graphs for practical workloads
+- memory: `O(n + m + k)` rather than `O(n^2)`
+
+Current implemented complexity for `local_move_incremental()`:
+- graph conversion from dense input: `O(n^2)` once, because current public inputs are dense adjacency matrices
+- sparse node-move pass after conversion: approximately `O(sum_v deg(v) * neighbor_cluster_count(v))`
+- memory after conversion: `O(n + m + k)`
+
+For already-sparse public inputs in a future API, the `O(n^2)` conversion cost can be removed.
 
 ## Benchmark Contract
-`tests/benchmark_seclust.py` mirrors the style of `tests/benchmark_full.py`:
-- builds datasets
-- runs multiple algorithms
-- computes SE, gap, ARI, NMI, and timing
-- prints a markdown table
-- writes report artifacts under `docs/experimental_reports/`
+`tests/benchmark_seclust.py` and `tests/benchmark_seclust_full.py` follow this pattern:
+- build or load datasets
+- run baselines or import already reported baseline values
+- run SEClust if estimated runtime is under the configured limit
+- log objective and clustering metrics
+- print markdown tables
+- write raw JSON and markdown reports under `docs/experimental_reports/`
 
-The benchmark algorithms are:
-- `SEClust-Auto`
-- `SEClust-Heuristic`
-- `SEClust-CEM`
-- `Official-SEP`
+Required metrics for future SEClust experiments are formalized in `docs/seclust/experiment_protocol.md`.
 
 ## Known Limitations
 - Exact search is exponential.
-- Heuristic search is currently correct but not optimized.
+- Current heuristic search is correct but not optimized.
 - CEM search is measurable but not competitive with deterministic local search.
-- The package assumes non-negative undirected adjacency matrices and symmetrizes inputs.
+- Current implementation assumes non-negative undirected adjacency matrices and symmetrizes inputs.
+- Dense scoring in the inner loop is the bottleneck.
+- Flat `H_2` optimization can over-partition, similar to Louvain's resolution behavior. On the current full benchmark, `SEClust-Auto` finds `K=6` on Karate where the ground truth has `K=2`, `K=7` on SBM N=100 where the planted `K=4`, and `K=14` on SBM N=1000 where the planted `K=10`. `SEClust-Tree` fixes these benchmark `K` values when the target `K` is supplied.
+- A single global flat partition cannot represent coarse and fine structure simultaneously. High-dimensional coding trees are the preferred fix because they preserve multiple resolutions.
 
 ## Next Work
-- Add incremental SE delta updates for node moves and cluster merges.
+- Implement incremental SE delta updates for cluster merges.
+- Add a native sparse input API so large graphs do not need dense adjacency materialization.
 - Add connectedness refinement similar to Leiden.
-- Add larger benchmark cases after delta scoring lands.
+- Add multilevel coarsening and refinement.
+- Upgrade `SEClust-Tree` from a merge hierarchy over flat modules to a full coding-tree optimizer with merge/compress/refine operations inspired by `official_baselines/SEP/SEPN/codingTree.py`.
+- Add level-selection strategies for extracting flat labels from a coding tree.
 - Use exact-labeled graphs to train or validate learned move policies.
-- Add compatibility shims only if downstream code needs the old prototype import path.
