@@ -25,6 +25,7 @@ TIME_LIMIT_SECONDS = 180.0
 SECLUST_STARTS = 6
 SECLUST_MAX_PASSES = 10
 SECLUST_SEED = 42
+MAX_DENSE_REAL_WORLD_NODES = 4000
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ REAL_WORLD_BASELINES = {
         ("LSEnet (Features + DSI)", 0.403, 0.195, 0.166),
         ("Glass-SE (Pure Topology)", 0.252, 0.037, 0.025),
     ],
+    "Photo": [],
 }
 
 
@@ -137,6 +139,43 @@ def real_world_unavailable(name: str) -> DatasetCase:
     return DatasetCase(name, None, None, None, "unavailable: torch_geometric datasets are not installed locally")
 
 
+def real_world_graph(name: str) -> DatasetCase:
+    try:
+        from torch_geometric.datasets import Amazon, Planetoid
+        from torch_geometric.utils import to_dense_adj, to_undirected
+    except Exception as exc:
+        return DatasetCase(name, None, None, None, f"unavailable: torch_geometric import failed: {exc}")
+
+    try:
+        if name in {"Cora", "Citeseer", "PubMed"}:
+            dataset = Planetoid(root="/tmp/dataset", name=name)
+        elif name in {"Photo", "Computers"}:
+            dataset = Amazon(root="/tmp/dataset", name=name)
+        else:
+            raise ValueError(f"Unknown real-world dataset {name}")
+    except Exception as exc:
+        return DatasetCase(name, None, None, None, f"unavailable: dataset load failed: {exc}")
+
+    data = dataset[0]
+    n_nodes = int(data.num_nodes)
+    k = int(dataset.num_classes)
+    labels = data.y.cpu().numpy().astype(np.int32)
+    if n_nodes > MAX_DENSE_REAL_WORLD_NODES:
+        dense_gib = (n_nodes * n_nodes * 8) / (1024**3)
+        return DatasetCase(
+            name,
+            None,
+            labels,
+            k,
+            f"skipped before dense materialization: {n_nodes} nodes would require ~{dense_gib:.2f} GiB dense adjacency",
+        )
+
+    edge_index = to_undirected(data.edge_index)
+    adj = to_dense_adj(edge_index, max_num_nodes=n_nodes)[0].cpu().numpy().astype(float)
+    np.fill_diagonal(adj, 0.0)
+    return DatasetCase(name, adj, labels, k, "torch_geometric")
+
+
 def get_cases() -> list[DatasetCase]:
     return [
         karate_graph(),
@@ -144,8 +183,9 @@ def get_cases() -> list[DatasetCase]:
         sbm_graph("SBM (N=100)", 100, 4, 0.4, 0.02, 42),
         sbm_graph("SBM (N=500)", 500, 5, 0.2, 0.01, 42),
         sbm_graph("SBM (N=1000)", 1000, 10, 0.1, 0.005, 42),
-        real_world_unavailable("Cora"),
-        real_world_unavailable("Citeseer"),
+        real_world_graph("Cora"),
+        real_world_graph("Citeseer"),
+        real_world_graph("Photo"),
     ]
 
 
@@ -317,6 +357,12 @@ def run_seclust(case: DatasetCase, algorithm: str = "SEClust-Auto") -> dict[str,
         }
 
     estimate = estimate_seclust_seconds(case.adjacency)
+    if case.source == "torch_geometric" and case.adjacency.shape[0] > 2000:
+        # The local move estimator captures sparse delta scoring but misses the
+        # dense final metric/scoring overhead that dominates citation graphs.
+        # Use an empirical dense guard so real-world runs are skipped before
+        # exceeding the 3 minute benchmark contract.
+        estimate = max(estimate, 4.0e-5 * float(case.adjacency.shape[0] ** 2))
     if estimate > TIME_LIMIT_SECONDS:
         return {
             "dataset": case.name,
@@ -543,7 +589,7 @@ Baseline values are copied from those reports. `SEClust-Auto` and `SEClust-Tree`
 
 ## 2. Setup
 - Synthetic datasets are generated locally with NumPy equivalents of the benchmark definitions.
-- Real-world PyG datasets are not installed in this workspace, so Cora and Citeseer SEClust rows are marked unavailable.
+- Real-world PyG datasets are loaded when `torch_geometric` is available. Dense real-world runs use the same 3 minute guard; Photo is skipped before dense materialization when it exceeds the dense node guard.
 - SEClust config: `mode="heuristic"`, `heuristic_starts={SECLUST_STARTS}`, `max_passes={SECLUST_MAX_PASSES}`, seed `{SECLUST_SEED}`.
 - Runtime limit: `{TIME_LIMIT_SECONDS:.0f}` seconds per dataset.
 - Logged metrics follow `docs/seclust/experiment_protocol.md`: ACC, NMI, ARI, K, modularity, structural entropy, map equation, and runtime.

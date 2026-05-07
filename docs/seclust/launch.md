@@ -77,8 +77,20 @@ Use benchmark names:
 ## Release Risks
 - Existing notebooks or scripts using prototype imports will break unless updated.
 - The flat heuristic can over-partition because `H_2` chooses one global resolution.
-- The current scalable backend optimizes flat SE only; high-dimensional coding-tree SE is not implemented yet.
+- `SEClust-Tree` now scores hierarchy merges with high-dimensional SE, but it still starts from flat SEClust base modules and does not yet implement full SEP-style compression/refinement.
 - The official SEP wrapper depends on the local baseline path `official_baselines/SEP/SEPN/codingTree.py`.
+
+## High-Dimensional SE Status
+The intended coding-tree objective is:
+
+```text
+H_T(G) = - sum_{alpha != root} (g_alpha / vol(G)) log2(vol(alpha) / vol(parent(alpha)))
+```
+
+Current status:
+- `SEClust-Auto`: optimizes flat `H_2`.
+- `SEClust-Tree`: builds a coding tree over flat SEClust base modules, scores merges by `Delta H_T(G)`, and extracts a target level.
+- Full SEP-style optimization of `H_T(G)` with compress/leaf-up/root-down operations is not implemented yet.
 
 ## Rollback
 If downstream imports unexpectedly depend on the prototype path, add a temporary compatibility package:
@@ -90,7 +102,7 @@ src/glass/<prototype_path>/__init__.py
 that re-exports from `glass.seclust` and emits a deprecation warning. Do this only if needed; the clean launch path is `glass.seclust`.
 
 ## Post-Launch Tasks
-- Upgrade the implemented `SEClust-Tree` merge hierarchy into a full coding-tree optimizer based on high-dimensional SE.
+- Upgrade the implemented `SEClust-Tree` high-dimensional merge hierarchy into a full coding-tree optimizer.
 - Implement incremental merge deltas for the hierarchy.
 - Add connectedness refinement.
 - Re-run benchmark with larger planted graphs.

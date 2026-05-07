@@ -55,18 +55,26 @@ The current `SEClust-Auto` optimizer returns a flat partition and optimizes `H_2
 - `build_coding_tree(k)` constructs a coding tree up to height/depth `k`.
 - `leaf_up()` and `root_down()` refine the hierarchy by expanding lower-level modules or restructuring upper-level modules.
 
-In high-dimensional SE, a partition is represented by a rooted coding tree. Each non-root tree node `alpha` contributes:
+In high-dimensional SE, a partition is represented by a rooted coding tree `T`. Let each tree node `alpha` represent a subset of graph vertices. Let:
+
+- `V_alpha` be the vertex subset represented by `alpha`.
+- `vol(alpha) = sum_{v in V_alpha} d_v`.
+- `g_alpha` be the cut volume from `V_alpha` to `V_parent(alpha) \ V_alpha`; for children of the root this is the cut to the rest of the graph.
+- `parent(alpha)` be the parent coding-tree node.
+
+Each non-root tree node `alpha` contributes:
 
 ```text
 H_T(G) = - sum_{alpha != root} (g_alpha / vol(G)) log2(vol(alpha) / vol(parent(alpha)))
 ```
 
-where:
-- `vol(alpha)` is the volume of the node's represented vertex subset.
-- `g_alpha` is the cut volume from that subset to the rest of the graph region represented at the relevant tree level.
-- `parent(alpha)` is the parent coding-tree node.
+For a two-level tree, the coding-tree term over top-level modules plus leaf terms recovers the flat two-dimensional structural entropy. For deeper trees, the objective can encode coarse communities and subcommunities at different resolutions.
 
-For a two-level tree, this reduces to the flat `H_2` objective. For deeper trees, the objective can encode coarse communities and subcommunities at different resolutions.
+Implementation status:
+- `SEClust-Auto` uses flat `H_2`.
+- Current `SEClust-Tree` uses the high-dimensional coding-tree objective for its merge deltas over flat SEClust base modules.
+- Current `SEClust-Tree` includes fixed leaf terms for original vertices and internal terms for the module coding tree, so a two-level tree matches flat `H_2`.
+- Current `SEClust-Tree` is not yet the full SEP optimizer: `CompressDelta()`, `leaf_up()`, and `root_down()` style tree refinement remain future work.
 
 ## Package Layout
 ```text
@@ -222,15 +230,56 @@ Each start is refined by local node moves, and the best final SE is returned. Th
 ## Algorithm 6: Hierarchical SEClust
 Hierarchical SEClust is the resolution-control path. The first implementation is available as `hierarchical_se_clustering()` in `src/glass/seclust/hierarchy.py`.
 
-The current implementation is a practical high-level hierarchy:
+The current implementation is a practical high-level coding-tree hierarchy:
 - run fast flat SEClust to get fine modules
-- greedily merge adjacent modules into coarser levels
+- greedily merge modules using high-dimensional structural entropy deltas
 - select a level by `target_clusters` when available
 - expose all intermediate levels as a merge hierarchy
 
-This is not yet the full SEP-style high-dimensional coding tree, but it implements the most important product behavior: extracting a better coarse level from an over-partitioned flat SE solution.
+This is not yet the full SEP-style coding-tree optimizer, but it now uses the high-dimensional objective for the hierarchy it builds. It implements the most important product behavior: extracting a better coarse level from an over-partitioned flat SE solution while retaining a coding-tree path to the fine modules.
 
-The next deeper implementation should follow the SEP coding-tree idea but use the new sparse incremental state for scalability.
+The next deeper implementation should add SEP-style compression and refinement while using the new sparse incremental state for scalability.
+
+Current objective used by `SEClust-Tree`:
+
+```text
+base_labels = approximate argmin H_2(P)
+tree = coding tree whose leaves are original vertices grouped by base_labels
+levels = greedy merges of active tree roots scored by Delta H_T(G)
+selected = level with target_clusters if supplied
+```
+
+For a candidate merge of active tree roots `a` and `b`, with new parent `p = a union b`, SEClust-Tree scores:
+
+```text
+Delta =
+  h(p | root) + h(a | p) + h(b | p)
+  - h(a | root) - h(b | root)
+
+h(alpha | parent) =
+  - (g_alpha / vol(G)) log2(vol(alpha) / vol(parent))
+```
+
+where:
+- `vol(p) = vol(a) + vol(b)`
+- `g_p = g_a + g_b - 2 w(a, b)`
+- `w(a, b)` is the total edge weight between the two active modules
+
+The full tree entropy reported for a level is:
+
+```text
+H_T(G) =
+  fixed leaf entropy under base modules
+  + sum active/internal coding-tree terms
+```
+
+The fixed leaf entropy is:
+
+```text
+- sum_base_module C sum_{v in C} (d_v / vol(G)) log2(d_v / vol(C))
+```
+
+So yes: `SEClust-Tree` is now using high-dimensional SE for merge scoring. The remaining limitation is optimizer completeness, not the objective formula.
 
 The algorithm should maintain a tree whose leaves are original nodes and whose internal nodes are modules. It should support:
 
@@ -363,8 +412,8 @@ SEClust can scale to thousands of nodes only if it stops using full dense rescor
 8. **Learned proposal policy**
    Use exact-labeled small graphs and heuristic traces to train a policy that proposes high-value moves. The policy should reduce candidate evaluations, not replace the SE objective.
 
-9. **Hierarchical high-dimensional SE: first high-level version implemented**
-   `SEClust-Tree` now builds a merge hierarchy over flat SEClust modules and supports target-`K` extraction. The remaining work is the full sparse coding-tree optimizer based on the high-dimensional SE formulation above.
+9. **Hierarchical high-dimensional SE: first coding-tree version implemented**
+   `SEClust-Tree` now builds a coding-tree merge hierarchy over flat SEClust modules, scores merges by `Delta H_T(G)`, and supports target-`K` extraction. The remaining work is the full sparse coding-tree optimizer with compression and refinement.
 
 Target complexity after these changes:
 - local move pass: approximately `O(m)` to `O(m log n)` depending on caches
@@ -397,12 +446,13 @@ Required metrics for future SEClust experiments are formalized in `docs/seclust/
 - Dense scoring in the inner loop is the bottleneck.
 - Flat `H_2` optimization can over-partition, similar to Louvain's resolution behavior. On the current full benchmark, `SEClust-Auto` finds `K=6` on Karate where the ground truth has `K=2`, `K=7` on SBM N=100 where the planted `K=4`, and `K=14` on SBM N=1000 where the planted `K=10`. `SEClust-Tree` fixes these benchmark `K` values when the target `K` is supplied.
 - A single global flat partition cannot represent coarse and fine structure simultaneously. High-dimensional coding trees are the preferred fix because they preserve multiple resolutions.
+- The first high-dimensional merge scorer can choose poorer coarse merges on larger SBM cases than the previous flat-`H_2` merge heuristic. In the current full benchmark it fixes target `K`, but `SBM N=500` and `SBM N=1000` lose ARI versus `SEClust-Auto`. This points to missing coding-tree refinement and level-selection work, not a runtime blocker.
 
 ## Next Work
 - Implement incremental SE delta updates for cluster merges.
 - Add a native sparse input API so large graphs do not need dense adjacency materialization.
 - Add connectedness refinement similar to Leiden.
 - Add multilevel coarsening and refinement.
-- Upgrade `SEClust-Tree` from a merge hierarchy over flat modules to a full coding-tree optimizer with merge/compress/refine operations inspired by `official_baselines/SEP/SEPN/codingTree.py`.
+- Upgrade `SEClust-Tree` from a greedy high-dimensional merge tree to a full coding-tree optimizer with compress/refine operations inspired by `official_baselines/SEP/SEPN/codingTree.py`.
 - Add level-selection strategies for extracting flat labels from a coding tree.
 - Use exact-labeled graphs to train or validate learned move policies.

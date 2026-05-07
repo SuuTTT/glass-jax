@@ -11,6 +11,7 @@ from glass.seclust import (
     cem_node_move_search,
     cluster_graph,
     exact_minimize_structural_entropy,
+    coding_tree_hierarchy_levels,
     hierarchical_se_clustering,
     iter_restricted_growth_strings,
     local_move_incremental,
@@ -128,6 +129,15 @@ def test_hierarchical_se_clustering_extracts_target_k():
     assert len(np.unique(result.labels)) == 2
     assert result.levels[0].k >= result.levels[-1].k
     assert math.isclose(result.entropy, structural_entropy(adj, result.labels), abs_tol=1e-12)
+
+
+def test_coding_tree_two_level_entropy_matches_flat_h2():
+    adj = weighted_bridge_graph(4, 4, bridge_weight=1.0)
+    labels = np.array([0, 0, 0, 0, 1, 1, 1, 1], dtype=np.int32)
+    levels = coding_tree_hierarchy_levels(adj, labels, min_clusters=2)
+
+    assert levels[0].tree_entropy is not None
+    assert math.isclose(levels[0].tree_entropy, structural_entropy(adj, labels), abs_tol=1e-12)
 
 
 def test_rl_environment_and_cem_search_are_wired():

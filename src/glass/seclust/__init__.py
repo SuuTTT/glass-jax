@@ -28,7 +28,9 @@ from .heuristics import (
 from .hierarchy import (
     HierarchicalClusteringResult,
     HierarchicalLevel,
+    coding_tree_hierarchy_levels,
     hierarchical_se_clustering,
+    high_dimensional_tree_entropy,
     merge_hierarchy_levels,
     select_hierarchy_level,
 )
@@ -56,10 +58,12 @@ __all__ = [
     "canonicalize_labels",
     "cem_node_move_search",
     "cluster_graph",
+    "coding_tree_hierarchy_levels",
     "compare_on_dataset",
     "exact_minimize_structural_entropy",
     "iter_restricted_growth_strings",
     "hierarchical_se_clustering",
+    "high_dimensional_tree_entropy",
     "label_graph",
     "labels_to_partition",
     "local_move_se_clustering",
