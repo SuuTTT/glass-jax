@@ -16,7 +16,17 @@ import math
 from pathlib import Path
 import time
 
+import jax
+import jax.numpy as jnp
+import networkx as nx
+import optax
 import numpy as np
+from community import community_louvain
+import infomap
+
+from glass.objectives.map_equation import soft_map_equation
+from glass.objectives.modularity import soft_modularity
+from glass.solvers.spectral import spectral_embedding
 
 from glass.seclust import IncrementalSEState, SparseGraph, cluster_graph, hierarchical_se_clustering, structural_entropy
 
@@ -38,49 +48,17 @@ class DatasetCase:
 
 
 SYNTHETIC_BASELINES = {
-    "Karate": [
-        ("Louvain", 0.465, 0.588, 0.0048),
-        ("Infomap", 0.684, 0.691, 0.0052),
-        ("Glass-Mod (JAX)", 0.882, 0.837, 0.0239),
-        ("Glass-Map (JAX)", 0.882, 0.837, 0.0158),
-    ],
-    "Caveman (10x20)": [
-        ("Louvain", 1.000, 1.000, 0.0243),
-        ("Glass-Mod (JAX)", 0.894, 0.969, 0.3679),
-        ("Glass-Map (JAX)", 0.728, 0.901, 0.6663),
-    ],
-    "SBM (N=100)": [
-        ("Louvain", 0.973, 0.970, 0.0416),
-        ("Infomap", 1.000, 1.000, 0.0281),
-        ("Glass-Mod (JAX)", 0.973, 0.970, 0.0449),
-        ("Glass-Map (JAX)", 0.708, 0.857, 0.1020),
-    ],
-    "SBM (N=500)": [
-        ("Louvain", 1.000, 1.000, 0.1925),
-        ("Infomap", 1.000, 1.000, 0.0600),
-        ("Glass-Mod (JAX)", 1.000, 1.000, 0.8530),
-        ("Glass-Map (JAX)", 0.888, 0.897, 1.0643),
-    ],
-    "SBM (N=1000)": [
-        ("Louvain", 0.996, 0.995, 0.4850),
-        ("Infomap", 0.998, 0.998, 0.1691),
-        ("Glass-Mod (JAX)", 0.800, 0.886, 5.9432),
-        ("Glass-Map (JAX)", 0.621, 0.754, 7.4689),
-    ],
+    "Karate": ["Louvain", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
+    "Caveman (10x20)": ["Louvain", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
+    "SBM (N=100)": ["Louvain", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
+    "SBM (N=500)": ["Louvain", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
+    "SBM (N=1000)": ["Louvain", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
 }
 
 
 REAL_WORLD_BASELINES = {
-    "Cora": [
-        ("Louvain (Topology)", 0.372, 0.439, 0.236),
-        ("LSEnet (Features + DSI)", 0.387, 0.266, 0.164),
-        ("Glass-SE (Pure Topology)", 0.274, 0.076, 0.039),
-    ],
-    "Citeseer": [
-        ("Louvain (Topology)", 0.192, 0.329, 0.094),
-        ("LSEnet (Features + DSI)", 0.403, 0.195, 0.166),
-        ("Glass-SE (Pure Topology)", 0.252, 0.037, 0.025),
-    ],
+    "Cora": ["Louvain (Topology)", "LSEnet (Features + DSI)", "Glass-SE (Pure Topology)"],
+    "Citeseer": ["Louvain (Topology)", "LSEnet (Features + DSI)", "Glass-SE (Pure Topology)"],
     "Photo": [],
 }
 
@@ -254,6 +232,142 @@ def clustering_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
             used_rows.add(row)
             used_cols.add(col)
     return float(total / y_true.size)
+
+
+def run_louvain(adj: np.ndarray, seed: int = 42) -> tuple[np.ndarray, float]:
+    start = time.time()
+    graph = nx.from_numpy_array(adj)
+    partition = community_louvain.best_partition(graph, random_state=seed)
+    labels = np.array([partition[i] for i in range(len(graph.nodes))], dtype=np.int32)
+    return labels, time.time() - start
+
+
+def run_infomap(adj: np.ndarray, seed: int = 42) -> tuple[np.ndarray, float]:
+    start = time.time()
+    model = infomap.Infomap(f"--two-level --silent --seed {seed}")
+    rows, cols = np.where(adj > 0)
+    for row, col in zip(rows, cols):
+        model.add_link(int(row), int(col), float(adj[row, col]))
+    model.run()
+    labels = np.zeros(adj.shape[0], dtype=np.int32)
+    for node in model.tree:
+        if node.is_leaf:
+            labels[node.node_id] = node.module_id - 1
+    return labels, time.time() - start
+
+
+def run_glass_jax_multistart(
+    adj: np.ndarray,
+    n_communities: int,
+    objective_fn,
+    n_iters: int = 500,
+    lr: float = 0.05,
+    n_starts: int = 4,
+    seed: int = 42,
+) -> tuple[np.ndarray, float]:
+    n_nodes = adj.shape[0]
+    adj_jax = jnp.array(adj)
+    pi = None
+    if "map_equation" in objective_fn.__name__:
+        from glass.objectives.map_equation import compute_stationary_distribution
+
+        pi = compute_stationary_distribution(adj_jax)
+
+    emb = spectral_embedding(adj_jax, n_communities)
+    spectral_init = jnp.array(emb) * 5.0
+    key = jax.random.PRNGKey(seed)
+    keys = jax.random.split(key, n_starts - 1)
+    random_inits = jax.vmap(lambda rng: jax.random.normal(rng, (n_nodes, n_communities)) * 0.1)(keys)
+    all_inits = jnp.concatenate([spectral_init[None, ...], random_inits], axis=0)
+    optimizer = optax.adam(lr)
+
+    def optimize_single(logits_init):
+        opt_state = optimizer.init(logits_init)
+
+        def step(state, temp):
+            logits, opt_state = state
+
+            def loss_fn(l):
+                S = jax.nn.softmax(l / temp, axis=-1)
+                if pi is not None:
+                    value = objective_fn(adj_jax, S, pi=pi, is_logits=False)
+                else:
+                    value = objective_fn(adj_jax, S, is_logits=False)
+                if "map_equation" in objective_fn.__name__ or "structural_entropy" in objective_fn.__name__:
+                    return value
+                return -value
+
+            (loss, grads) = jax.value_and_grad(loss_fn)(logits)
+            updates, opt_state = optimizer.update(grads, opt_state)
+            logits = optax.apply_updates(logits, updates)
+            return (logits, opt_state), loss
+
+        temps = jnp.linspace(1.0, 0.01, n_iters)
+        final_state, _ = jax.lax.scan(step, (logits_init, opt_state), temps)
+        final_logits = final_state[0]
+        S_eval = jax.nn.softmax(final_logits / 0.01, axis=-1)
+        if pi is not None:
+            eval_loss = objective_fn(adj_jax, S_eval, pi=pi, is_logits=False)
+        else:
+            eval_loss = objective_fn(adj_jax, S_eval, is_logits=False)
+        if "map_equation" not in objective_fn.__name__ and "structural_entropy" not in objective_fn.__name__:
+            eval_loss = -eval_loss
+        return final_logits, eval_loss
+
+    vmap_optimize = jax.jit(jax.vmap(optimize_single))
+    _ = vmap_optimize(all_inits)
+    start = time.time()
+    all_final_logits, all_final_losses = vmap_optimize(all_inits)
+    all_final_logits.block_until_ready()
+    duration = time.time() - start
+
+    best_idx = jnp.argmin(all_final_losses)
+    best_logits = all_final_logits[best_idx]
+    S = jax.nn.softmax(best_logits / 0.01, axis=-1)
+    return np.array(jnp.argmax(S, axis=-1)), duration
+
+
+def run_synthetic_baseline(case: DatasetCase, algorithm: str) -> dict[str, object]:
+    if algorithm == "Louvain":
+        labels, duration = run_louvain(case.adjacency, seed=SECLUST_SEED)
+    elif algorithm == "Infomap":
+        labels, duration = run_infomap(case.adjacency, seed=SECLUST_SEED)
+    elif algorithm == "Glass-Mod (JAX)":
+        labels, duration = run_glass_jax_multistart(
+            case.adjacency,
+            case.k,
+            soft_modularity,
+            n_iters=120,
+            n_starts=2,
+            seed=SECLUST_SEED,
+        )
+    elif algorithm == "Glass-Map (JAX)":
+        labels, duration = run_glass_jax_multistart(
+            case.adjacency,
+            case.k,
+            soft_map_equation,
+            n_iters=120,
+            n_starts=2,
+            seed=SECLUST_SEED,
+        )
+    else:
+        raise ValueError(f"Unknown synthetic baseline {algorithm}")
+
+    return {
+        "dataset": case.name,
+        "algorithm": algorithm,
+        "ari": adjusted_rand_index(case.labels, labels),
+        "nmi": normalized_mutual_info(case.labels, labels),
+        "acc": clustering_accuracy(case.labels, labels),
+        "k": int(len(np.unique(labels))),
+        "modularity": hard_modularity(case.adjacency, labels),
+        "structural_entropy": structural_entropy(case.adjacency, labels),
+        "map_equation": hard_map_equation(case.adjacency, labels),
+        "time": duration,
+        "estimated_time": None,
+        "se": None,
+        "status": "baseline_executed",
+    }
 
 
 def hard_modularity(adj: np.ndarray, labels: np.ndarray) -> float:
@@ -512,39 +626,23 @@ def real_world_table(rows: list[dict[str, object]]) -> str:
 def run_benchmark() -> list[dict[str, object]]:
     cases = {case.name: case for case in get_cases()}
     rows: list[dict[str, object]] = []
-    for dataset, baseline_rows in SYNTHETIC_BASELINES.items():
-        for algorithm, ari, nmi, seconds in baseline_rows:
-            rows.append(
-                {
-                    "dataset": dataset,
-                    "algorithm": algorithm,
-                    "ari": ari,
-                    "k": None,
-                    "modularity": None,
-                    "structural_entropy": None,
-                    "map_equation": None,
-                    "nmi": nmi,
-                    "acc": None,
-                    "time": seconds,
-                    "estimated_time": None,
-                    "se": None,
-                    "status": "baseline from benchmark_sbm_20260506.md",
-                }
-            )
+    for dataset, algorithms in SYNTHETIC_BASELINES.items():
+        for algorithm in algorithms:
+            rows.append(run_synthetic_baseline(cases[dataset], algorithm))
         print(f"Running SEClust on {dataset}...", flush=True)
         rows.append(run_seclust(cases[dataset]))
         print(f"Running SEClust-Tree on {dataset}...", flush=True)
         rows.append(run_seclust(cases[dataset], algorithm="SEClust-Tree"))
 
-    for dataset, baseline_rows in REAL_WORLD_BASELINES.items():
-        for algorithm, acc, nmi, ari in baseline_rows:
+    for dataset, algorithms in REAL_WORLD_BASELINES.items():
+        for algorithm in algorithms:
             rows.append(
                 {
                     "dataset": dataset,
                     "algorithm": algorithm,
-                    "acc": acc,
-                    "nmi": nmi,
-                    "ari": ari,
+                    "acc": None,
+                    "nmi": None,
+                    "ari": None,
                     "k": None,
                     "modularity": None,
                     "structural_entropy": None,
@@ -552,7 +650,7 @@ def run_benchmark() -> list[dict[str, object]]:
                     "time": None,
                     "estimated_time": None,
                     "se": None,
-                    "status": "baseline from real_world_comparison_20260507.md",
+                    "status": "baseline_imported",
                 }
             )
         print(f"Running SEClust on {dataset}...", flush=True)
