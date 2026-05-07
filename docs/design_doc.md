@@ -15,8 +15,9 @@ In representation learning and reinforcement learning, understanding the latent 
 
 ### 3.1 Objectives (`src/glass/objectives/`)
 This module contains the core differentiable loss functions.
-*   **Soft Modularity (`modularity.py`):** Relaxes the Louvain objective. It computes $Q = \frac{1}{2m} \text{Tr}(S^T B S)$ efficiently using `jnp.einsum` to avoid instantiating the dense modularity matrix $B$.
-*   **Soft Map Equation (`map_equation.py`):** A differentiable approximation of Infomap. It computes the description length of a random walk based on soft transition probabilities and cluster visit rates.
+*   **Soft Modularity (`modularity.py`):** Relaxes the Louvain objective. It computes $Q = \frac{1}{2m} \text{Tr}(S^T B S)$ efficiently using highly optimized matrix operations.
+*   **Soft Map Equation (`map_equation.py`):** A differentiable approximation of Infomap. It computes the description length of a random walk (flow-centric).
+*   **Structural Entropy (`structural_entropy.py`):** A differentiable implementation of 1D and 2D Structural Entropy, focusing on the uncertainty of graph organization (volume and cuts).
 *   **Cuts (`cut.py`):** Standard Min-Cut and Normalized Cut implementations adapted for soft assignments $S$.
 
 ### 3.2 Solvers (`src/glass/solvers/`)
@@ -38,6 +39,9 @@ Because the Map Equation and Modularity landscapes are highly non-convex, random
 2.  **Hybrid Initialization:** A batch of initializations is provided (e.g., 1 Spectral Embedding + 7 Random Gaussian noises).
 3.  **Temperature Annealing:** A softmax temperature is decayed from $\tau=1.0$ to $\tau=0.1$ to gradually sharpen the soft assignments into discrete-like decisions.
 4.  **Selection:** The trajectory yielding the best unscaled objective value is selected.
+
+### 4.1 Rejected Design Choice: Gumbel-Softmax
+During development, the Gumbel-Softmax straight-through estimator was evaluated as an alternative to Temperature Annealing. The theoretical advantage was that the forward pass would evaluate the objective on hard categorical assignments (mimicking discrete partitioning) while maintaining differentiable backward passes. However, ablation studies revealed that the harshness of the discrete updates destabilized the optimization trajectory, causing the Adam optimizer to frequently escape favorable local minima. The smoother gradient landscape provided by standard temperature annealing proved to be significantly more robust and accurate.
 
 ## 5. Security & Safety
 *   The library relies exclusively on standard scientific computing packages (`jax`, `numpy`, `networkx`, `scikit-learn`).

@@ -22,7 +22,7 @@ def compute_stationary_distribution(A, num_iters=100, eps=1e-8):
     pi = jax.lax.fori_loop(0, num_iters, body_fn, pi)
     return pi
 
-def soft_map_equation(A, S, mask=None, pi=None):
+def soft_map_equation(A, S, mask=None, pi=None, is_logits=True):
     """
     Differentiable Map Equation (Soft Infomap).
     
@@ -31,9 +31,11 @@ def soft_map_equation(A, S, mask=None, pi=None):
         S: Soft assignment matrix (N, K).
         mask: Optional mask (N,).
         pi: Optional pre-computed stationary distribution (N,).
+        is_logits: If True, apply softmax to S along the last axis.
     """
     N, K = S.shape
-    S = jax.nn.softmax(S, axis=-1)
+    if is_logits:
+        S = jax.nn.softmax(S, axis=-1)
     
     if mask is not None:
         S = S * mask[:, None]

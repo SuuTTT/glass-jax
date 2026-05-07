@@ -49,5 +49,8 @@ grads = jax.grad(soft_map_equation, argnums=1)(A, S_logits)
 ### Soft Modularity
 Maximizes $Q = \frac{1}{2m} \text{Tr}(S^T B S)$, where $B$ is the modularity matrix.
 
-### Soft Map Equation
-Approximates the description length $L(M)$ of a random walk over soft community assignments $S$, following the Information-Theoretic principles of Infomap.
+### Soft Map Equation (Infomap)
+Approximates the description length $L(M)$ of a random walk over soft community assignments $S$, focusing on the **flow** of information.
+
+### Structural Entropy (SE)
+Minimizes the structural uncertainty of the graph organization, focusing on the **static structure** (volume and cuts) of modules.

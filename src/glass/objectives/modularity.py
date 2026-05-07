@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-def soft_modularity(A, S, mask=None):
+def soft_modularity(A, S, mask=None, is_logits=True):
     """
     Calculate the soft modularity Q for a given adjacency matrix A and soft assignment S.
     
@@ -9,12 +9,14 @@ def soft_modularity(A, S, mask=None):
         A: Adjacency matrix of shape (N, N).
         S: Soft assignment matrix of shape (N, K).
         mask: Optional mask of shape (N,) for real/padded nodes.
+        is_logits: If True, apply softmax to S along the last axis.
         
     Returns:
         Scalar modularity value Q.
     """
     # Apply softmax to ensure rows sum to 1
-    S = jax.nn.softmax(S, axis=-1)
+    if is_logits:
+        S = jax.nn.softmax(S, axis=-1)
     
     if mask is not None:
         S = S * mask[:, None]
@@ -33,7 +35,10 @@ def soft_modularity(A, S, mask=None):
     #             = Tr(S^T A S) - (1/2m) * Tr(S^T k k^T S)
     #             = Tr(S^T A S) - (1/2m) * (S^T k)^T (S^T k)
     
-    STS_A = jnp.einsum('ik,jk,ij->', S, S, A)
+    # Highly optimized trace computation avoiding einsum
+    AS = jnp.dot(A, S)
+    STS_A = jnp.sum(S * AS)
+    
     ST_k = jnp.dot(S.T, k)
     STS_k = jnp.sum(ST_k**2)
     
