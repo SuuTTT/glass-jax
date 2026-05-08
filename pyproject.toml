@@ -21,6 +21,8 @@ dev = [
     "infomap",
     "networkx",
     "matplotlib",
+    "leidenalg",
+    "igraph",
 ]
 
 [build-system]

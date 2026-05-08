@@ -23,6 +23,8 @@ import optax
 import numpy as np
 from community import community_louvain
 import infomap
+import igraph
+import leidenalg
 
 from glass.objectives.map_equation import soft_map_equation
 from glass.objectives.modularity import soft_modularity
@@ -48,11 +50,11 @@ class DatasetCase:
 
 
 SYNTHETIC_BASELINES = {
-    "Karate": ["Louvain", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
-    "Caveman (10x20)": ["Louvain", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
-    "SBM (N=100)": ["Louvain", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
-    "SBM (N=500)": ["Louvain", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
-    "SBM (N=1000)": ["Louvain", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
+    "Karate": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
+    "Caveman (10x20)": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
+    "SBM (N=100)": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
+    "SBM (N=500)": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
+    "SBM (N=1000)": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
 }
 
 
@@ -242,6 +244,21 @@ def run_louvain(adj: np.ndarray, seed: int = 42) -> tuple[np.ndarray, float]:
     return labels, time.time() - start
 
 
+def run_leiden(adj: np.ndarray, seed: int = 42) -> tuple[np.ndarray, float]:
+    start = time.time()
+    sources, targets = np.triu(adj).nonzero()
+    weights = adj[sources, targets]
+    edges = list(zip(sources, targets))
+    g = igraph.Graph(n=adj.shape[0], edges=edges, directed=False)
+    g.es['weight'] = weights
+    partition = leidenalg.find_partition(g, leidenalg.ModularityVertexPartition, weights=weights, seed=seed)
+    labels = np.zeros(adj.shape[0], dtype=np.int32)
+    for i, cluster in enumerate(partition):
+        for node in cluster:
+            labels[node] = i
+    return labels, time.time() - start
+
+
 def run_infomap(adj: np.ndarray, seed: int = 42) -> tuple[np.ndarray, float]:
     start = time.time()
     model = infomap.Infomap(f"--two-level --silent --seed {seed}")
@@ -330,6 +347,8 @@ def run_glass_jax_multistart(
 def run_synthetic_baseline(case: DatasetCase, algorithm: str) -> dict[str, object]:
     if algorithm == "Louvain":
         labels, duration = run_louvain(case.adjacency, seed=SECLUST_SEED)
+    elif algorithm == "Leiden":
+        labels, duration = run_leiden(case.adjacency, seed=SECLUST_SEED)
     elif algorithm == "Infomap":
         labels, duration = run_infomap(case.adjacency, seed=SECLUST_SEED)
     elif algorithm == "Glass-Mod (JAX)":
@@ -503,6 +522,24 @@ def run_seclust(case: DatasetCase, algorithm: str = "SEClust-Auto") -> dict[str,
             max_passes=SECLUST_MAX_PASSES,
             seed=SECLUST_SEED,
         )
+    elif algorithm == "SEClust-TargetK":
+        from glass.seclust.incremental import multistart_incremental_se_heuristic
+        from glass.seclust.hierarchy import merge_hierarchy_levels, select_hierarchy_level
+        from glass.seclust.heuristics import ClusteringResult
+        
+        base_labels, _ = multistart_incremental_se_heuristic(
+            case.adjacency,
+            starts=SECLUST_STARTS,
+            max_passes=SECLUST_MAX_PASSES,
+            seed=SECLUST_SEED,
+        )
+        levels = merge_hierarchy_levels(case.adjacency, base_labels, min_clusters=case.k)
+        selected = select_hierarchy_level(levels, target_clusters=case.k)
+        result = ClusteringResult(
+            entropy=selected.entropy,
+            labels=selected.labels,
+            method="seclust-target-k",
+        )
     else:
         result = cluster_graph(
             case.adjacency,
@@ -552,7 +589,7 @@ def maybe_bold(text: str, enabled: bool) -> str:
 
 def synthetic_table(rows: list[dict[str, object]]) -> str:
     lines = [
-        "| Dataset | Algorithm | ACC | NMI | ARI | K | Modularity | StructuralEntropy | MapEquation | Time (s) | Estimate (s) | Status |",
+        "| Dataset | Algorithm | ACC | NMI | ARI | K | Modularity | StructuralEntropy | MapEquation | Time (s) | Estimate (s) | Graph (N, E, True K*) |",
         "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
     ]
     for dataset in SYNTHETIC_BASELINES:
@@ -577,9 +614,9 @@ def synthetic_table(rows: list[dict[str, object]]) -> str:
                         maybe_bold(fmt(row.get("modularity")), i in modularity_best),
                         maybe_bold(fmt(row.get("structural_entropy")), i in se_best),
                         maybe_bold(fmt(row.get("map_equation")), i in map_best),
-                        fmt(row.get("time"), 4),
-                        fmt(row.get("estimated_time"), 1),
-                        str(row.get("status", "ok")),
+                        fmt(row.get("runtime_seconds"), 4),
+                        fmt(row.get("estimated_runtime_seconds"), 1),
+                        f"{row.get('n_nodes')}, {row.get('n_edges')}, {row.get('true_k')}" if row.get("n_nodes") else "skip",
                     ]
                 )
                 + " |"
@@ -589,7 +626,7 @@ def synthetic_table(rows: list[dict[str, object]]) -> str:
 
 def real_world_table(rows: list[dict[str, object]]) -> str:
     lines = [
-        "| Dataset | Algorithm | ACC | NMI | ARI | K | Modularity | StructuralEntropy | MapEquation | Time (s) | Status |",
+        "| Dataset | Algorithm | ACC | NMI | ARI | K | Modularity | StructuralEntropy | MapEquation | Time (s) | Graph (N, E, True K*) |",
         "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
     ]
     for dataset in REAL_WORLD_BASELINES:
@@ -614,8 +651,8 @@ def real_world_table(rows: list[dict[str, object]]) -> str:
                         maybe_bold(fmt(row.get("modularity")), i in modularity_best),
                         maybe_bold(fmt(row.get("structural_entropy")), i in se_best),
                         maybe_bold(fmt(row.get("map_equation")), i in map_best),
-                        fmt(row.get("time"), 4),
-                        str(row.get("status", "ok")),
+                        fmt(row.get("runtime_seconds"), 4),
+                        f"{row.get('n_nodes')}, {row.get('n_edges')}, {row.get('true_k')}" if row.get("n_nodes") else "skip",
                     ]
                 )
                 + " |"
@@ -633,6 +670,8 @@ def run_benchmark() -> list[dict[str, object]]:
         rows.append(run_seclust(cases[dataset]))
         print(f"Running SEClust-Tree on {dataset}...", flush=True)
         rows.append(run_seclust(cases[dataset], algorithm="SEClust-Tree"))
+        print(f"Running SEClust-TargetK on {dataset}...", flush=True)
+        rows.append(run_seclust(cases[dataset], algorithm="SEClust-TargetK"))
 
     for dataset, algorithms in REAL_WORLD_BASELINES.items():
         for algorithm in algorithms:
@@ -657,14 +696,54 @@ def run_benchmark() -> list[dict[str, object]]:
         rows.append(run_seclust(cases[dataset]))
         print(f"Running SEClust-Tree on {dataset}...", flush=True)
         rows.append(run_seclust(cases[dataset], algorithm="SEClust-Tree"))
+        print(f"Running SEClust-TargetK on {dataset}...", flush=True)
+        rows.append(run_seclust(cases[dataset], algorithm="SEClust-TargetK"))
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    experiment_id = f"seclust_full_benchmark_{timestamp}"
+    import numpy as np
+    for row in rows:
+        case = cases[row["dataset"]]
+        row["experiment_id"] = experiment_id
+        row["true_k"] = case.k
+        row["dataset_source"] = case.source
+        row["n_nodes"] = case.adjacency.shape[0] if case.adjacency is not None else None
+        row["n_edges"] = int(np.sum(case.adjacency > 0) / 2) if case.adjacency is not None else None
+        
+        algo = str(row.get("algorithm", ""))
+        if "SEClust" in algo or algo in ["Louvain", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"]:
+            row["seed"] = SECLUST_SEED
+        else:
+            row["seed"] = None
+            
+        status_orig = str(row.get("status", "ok"))
+        if status_orig.startswith("skipped") or status_orig.startswith("unavailable"):
+            row["skip_reason"] = status_orig
+            row["status"] = "skipped"
+        elif status_orig == "baseline_executed":
+            row["status"] = "ok"
+            row["skip_reason"] = None
+        elif status_orig == "baseline_imported":
+            row["status"] = "baseline_imported"
+            row["skip_reason"] = None
+        else:
+            row["status"] = "ok"
+            row["skip_reason"] = None
+            
+        row["estimated_runtime_seconds"] = row.pop("estimated_time", None)
+        row["runtime_seconds"] = row.pop("time", None)
+        row["labels_path"] = None
+        row.pop("se", None)
+        
     return rows
 
 
 def write_report(rows: list[dict[str, object]]) -> Path:
     out_dir = Path("docs/experimental_reports")
     out_dir.mkdir(parents=True, exist_ok=True)
-    json_path = out_dir / "seclust_full_benchmark_20260507.json"
-    report_path = out_dir / "seclust_full_benchmark_20260507.md"
+    exp_id = rows[0]["experiment_id"] if rows else "seclust_full_benchmark"
+    json_path = out_dir / f"{exp_id}.json"
+    report_path = out_dir / f"{exp_id}.md"
     json_path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
 
     synthetic_rows = [row for row in rows if row["dataset"] in SYNTHETIC_BASELINES]
@@ -703,6 +782,10 @@ Baseline values are copied from those reports. `SEClust-Auto` and `SEClust-Tree`
 - Completed SEClust runs: `{len(completed)}`.
 - Skipped or unavailable SEClust runs: `{len(skipped)}`.
 - Larger synthetic graphs now use sparse incremental structural entropy delta scoring. Runs are skipped only if the incremental estimator exceeds the 3 minute limit.
+
+**Notes:**
+- **True K***: Denotes the ground-truth number of communities in the dataset. Parameter-free community detection algorithms (like Louvain, Leiden, and Infomap) do *not* take `K` as an input; their output `K` is dynamically determined by the objective function's mathematical peak.
+- **Skipped Real-World Datasets**: Real-world datasets with `status=skipped` either exceed the dense matrix memory limit (`N > 4000`, e.g., Photo) or fail the quadratic $O(N^2)$ time-estimate guardrail for dense PyG graphs.
 
 Raw results are saved at `{json_path}`.
 """

@@ -17,27 +17,52 @@ class SparseGraph:
     neighbors: tuple[np.ndarray, ...]
     weights: tuple[np.ndarray, ...]
     degrees: np.ndarray
+    node_cuts: np.ndarray
+    node_degree_log_degree: np.ndarray
     volume: float
     n_nodes: int
     n_edges: int
 
     @classmethod
-    def from_adjacency(cls, adj: np.ndarray) -> "SparseGraph":
-        matrix = as_symmetric_adjacency(adj)
+    def from_adjacency(cls, adj, node_degree_log_degree=None) -> "SparseGraph":
+        import scipy.sparse as sp
+        if sp.issparse(adj):
+            matrix = adj.tocsr()
+            matrix = 0.5 * (matrix + matrix.T)
+        else:
+            matrix = np.asarray(adj, dtype=float)
+            matrix = 0.5 * (matrix + matrix.T)
+            matrix = sp.csr_matrix(matrix)
+            
+        degrees = np.asarray(matrix.sum(axis=1)).flatten()
+        matrix.setdiag(0.0)
+        matrix.eliminate_zeros()
+        node_cuts = np.asarray(matrix.sum(axis=1)).flatten()
+        
+        if node_degree_log_degree is None:
+            node_degree_log_degree = np.zeros_like(degrees)
+            positive = degrees > 1e-12
+            node_degree_log_degree[positive] = degrees[positive] * np.log2(degrees[positive])
+        
         neighbors = []
         weights = []
-        degrees = matrix.sum(axis=1)
         edge_count = 0
         for node in range(matrix.shape[0]):
-            idx = np.flatnonzero(matrix[node] > 0)
-            vals = matrix[node, idx].astype(float, copy=True)
+            start = matrix.indptr[node]
+            end = matrix.indptr[node+1]
+            idx = matrix.indices[start:end]
+            vals = matrix.data[start:end]
+            
             neighbors.append(idx.astype(np.int32, copy=False))
-            weights.append(vals)
+            weights.append(vals.astype(float, copy=False))
             edge_count += int(np.sum(idx > node))
+            
         return cls(
             neighbors=tuple(neighbors),
             weights=tuple(weights),
             degrees=degrees.astype(float, copy=False),
+            node_cuts=node_cuts.astype(float, copy=False),
+            node_degree_log_degree=np.asarray(node_degree_log_degree, dtype=float),
             volume=float(degrees.sum()),
             n_nodes=int(matrix.shape[0]),
             n_edges=edge_count,
@@ -62,10 +87,7 @@ class IncrementalSEState:
         self.degree_log_degree = np.zeros(self.capacity, dtype=float)
         self.size = np.zeros(self.capacity, dtype=np.int32)
         self.active = np.zeros(self.capacity, dtype=bool)
-        self.node_degree_log_degree = np.zeros(graph.n_nodes, dtype=float)
-
-        positive = graph.degrees > eps
-        self.node_degree_log_degree[positive] = graph.degrees[positive] * np.log2(graph.degrees[positive])
+        self.node_degree_log_degree = graph.node_degree_log_degree.copy()
 
         for node, cluster in enumerate(self.labels):
             cid = int(cluster)
@@ -80,7 +102,11 @@ class IncrementalSEState:
             for nbr, weight in zip(graph.neighbors[node], graph.weights[node]):
                 if self.labels[int(nbr)] == cid:
                     internal_twice[cid] += float(weight)
-        self.cut = self.volume - internal_twice
+        cluster_node_cuts = np.zeros(self.capacity, dtype=float)
+        for node in range(graph.n_nodes):
+            cid = int(self.labels[node])
+            cluster_node_cuts[cid] += graph.node_cuts[node]
+        self.cut = cluster_node_cuts - internal_twice
         self.cut[np.abs(self.cut) < 1e-10] = 0.0
         self.entropy = float(sum(self.cluster_entropy(cid) for cid in np.flatnonzero(self.active)))
 
@@ -205,6 +231,51 @@ class IncrementalSEState:
             self.entropy = 0.0
         return delta
 
+    def merge_delta(self, left: int, right: int, weight_between: float) -> float:
+        """Calculate flat SE delta for merging two clusters."""
+        if left == right:
+            return 0.0
+            
+        vol_L = self.volume[left]
+        cut_L = self.cut[left]
+        dlogd_L = self.degree_log_degree[left]
+        
+        vol_R = self.volume[right]
+        cut_R = self.cut[right]
+        dlogd_R = self.degree_log_degree[right]
+        
+        new_vol = vol_L + vol_R
+        new_cut = cut_L + cut_R - 2.0 * weight_between
+        new_dlogd = dlogd_L + dlogd_R
+        
+        old_entropy_L = self.cluster_entropy_values(vol_L, cut_L, dlogd_L)
+        old_entropy_R = self.cluster_entropy_values(vol_R, cut_R, dlogd_R)
+        new_entropy = self.cluster_entropy_values(new_vol, new_cut, new_dlogd)
+        
+        return new_entropy - old_entropy_L - old_entropy_R
+
+    def apply_merge(self, left: int, right: int, weight_between: float) -> float:
+        """Apply a merge and return the entropy change."""
+        delta = self.merge_delta(left, right, weight_between)
+        
+        self.volume[left] += self.volume[right]
+        self.cut[left] += self.cut[right] - 2.0 * weight_between
+        self.degree_log_degree[left] += self.degree_log_degree[right]
+        self.size[left] += self.size[right]
+        
+        self.volume[right] = 0.0
+        self.cut[right] = 0.0
+        self.degree_log_degree[right] = 0.0
+        self.size[right] = 0
+        self.active[right] = False
+        
+        self.labels[self.labels == right] = left
+        self.entropy += delta
+        if abs(self.entropy) < 1e-12:
+            self.entropy = 0.0
+        return delta
+
+
     def canonical_labels(self) -> np.ndarray:
         return canonicalize_labels(self.labels)
 
@@ -215,15 +286,16 @@ class IncrementalSEState:
 
 
 def local_move_incremental(
-    adj: np.ndarray,
+    adj,
     init_labels: np.ndarray | None = None,
     max_passes: int = 20,
     seed: int = 0,
     allow_new_cluster: bool = True,
+    node_degree_log_degree=None,
 ) -> tuple[np.ndarray, float]:
     """Run sparse incremental node-move SE local search."""
 
-    graph = SparseGraph.from_adjacency(adj)
+    graph = SparseGraph.from_adjacency(adj, node_degree_log_degree)
     state = IncrementalSEState(graph, init_labels)
     rng = np.random.default_rng(seed)
 
@@ -247,10 +319,76 @@ def local_move_incremental(
             break
 
     labels = state.canonical_labels()
-    # Canonicalization can change ids but not the partition; score exactly once
-    # to remove tiny floating drift before returning a public result.
-    entropy = structural_entropy(adj, labels)
-    return labels, entropy
+    return labels, state.entropy
+
+
+
+import scipy.sparse as sp
+
+def multi_level_local_move(
+    adj,
+    init_labels: np.ndarray | None = None,
+    max_passes: int = 20,
+    seed: int = 0,
+    return_hierarchy: bool = False,
+):
+    rng = np.random.default_rng(seed)
+    
+    current_adj = adj
+    current_labels = init_labels
+    current_dlogd = None
+    
+    projections = []
+    
+    while True:
+        labels, _ = local_move_incremental(
+            current_adj,
+            node_degree_log_degree=current_dlogd,
+            init_labels=current_labels,
+            max_passes=max_passes,
+            seed=int(rng.integers(1<<30)),
+            allow_new_cluster=True,
+        )
+        
+        k = int(labels.max()) + 1
+        if k == current_adj.shape[0] or k == 1:
+            projections.append(labels)
+            break
+            
+        import scipy.sparse.csgraph as csgraph
+        new_labels = np.zeros_like(labels)
+        next_label = 0
+        for i in range(k):
+            mask = (labels == i)
+            if not np.any(mask): continue
+            sub_adj = current_adj[mask][:, mask]
+            n_comp, comp_labels = csgraph.connected_components(sub_adj, directed=False)
+            new_labels[mask] = comp_labels + next_label
+            next_label += n_comp
+            
+        labels = canonicalize_labels(new_labels)
+        k = int(labels.max()) + 1
+        
+        projections.append(labels)
+        
+        row = np.arange(len(labels))
+        col = labels
+        data = np.ones(len(labels), dtype=current_adj.dtype)
+        S = sp.csr_matrix((data, (row, col)), shape=(len(labels), k))
+        A_sparse = sp.csr_matrix(current_adj)
+        current_adj = S.T @ A_sparse @ S
+        
+        current_labels = np.arange(k, dtype=np.int32)
+        
+    final_labels = projections[-1]
+    for i in range(len(projections) - 2, -1, -1):
+        final_labels = final_labels[projections[i]]
+        
+    final_labels = canonicalize_labels(final_labels)
+    entropy = structural_entropy(adj, final_labels)
+    if return_hierarchy:
+        return final_labels, entropy, projections
+    return final_labels, entropy
 
 
 def multistart_incremental_se_heuristic(
@@ -274,12 +412,11 @@ def multistart_incremental_se_heuristic(
     best_labels: np.ndarray | None = None
     best_entropy = float("inf")
     for i, labels in enumerate(seeds):
-        candidate_labels, entropy = local_move_incremental(
+        candidate_labels, entropy = multi_level_local_move(
             adj,
             init_labels=labels,
             max_passes=max_passes,
             seed=seed + i,
-            allow_new_cluster=True,
         )
         if entropy < best_entropy:
             best_entropy = entropy
