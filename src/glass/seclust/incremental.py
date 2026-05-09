@@ -246,6 +246,85 @@ class IncrementalSEState:
         )
         return float(source_after + target_after - source_before - target_before)
 
+    def move_delta_batch(self, node: int, candidates: np.ndarray) -> np.ndarray:
+        """Vectorised SE deltas for moving ``node`` to each cluster in ``candidates``.
+
+        Returns an array of the same length as ``candidates`` with the SE
+        delta for each candidate. The ``source -> source`` move evaluates
+        to 0.0; for any inactive candidate cluster the existing entropy
+        contribution is treated as 0 (consistent with
+        ``cluster_entropy``). All cluster-entropy log/division work is
+        done with numpy vector ops, so the per-call cost is
+        $O(\\deg(v) + |\\text{candidates}|)$ in numpy operations rather
+        than $O(\\deg(v) \\cdot |\\text{candidates}|)$ in Python.
+        """
+
+        candidates = np.asarray(candidates, dtype=np.int64)
+        if candidates.size == 0:
+            return np.zeros(0, dtype=float)
+        source = int(self.labels[node])
+        degree = float(self.graph.degrees[node])
+        node_dlogd = float(self.node_degree_log_degree[node])
+
+        # Edge-weight-to-each-candidate, all in one pass.
+        nbrs = np.asarray(self.graph.neighbors[node], dtype=np.int64)
+        weights = np.asarray(self.graph.weights[node], dtype=float)
+        if nbrs.size:
+            nbr_clusters = self.labels[nbrs]
+            # (K_cand, deg) bool match, then weighted sum across deg.
+            matches = nbr_clusters[None, :] == candidates[:, None]
+            w_to_cand = (matches.astype(float) * weights[None, :]).sum(axis=1)
+            w_source = float(weights[nbr_clusters == source].sum())
+        else:
+            w_to_cand = np.zeros(candidates.size, dtype=float)
+            w_source = 0.0
+
+        # Vectorised cluster-entropy computation.
+        graph_volume = float(self.graph.volume)
+        eps = self.eps
+
+        def _cluster_entropy_vec(vol: np.ndarray, cut: np.ndarray, dlogd: np.ndarray) -> np.ndarray:
+            vol = np.asarray(vol, dtype=float)
+            cut = np.maximum(np.asarray(cut, dtype=float), 0.0)
+            dlogd = np.asarray(dlogd, dtype=float)
+            mask = (graph_volume > eps) & (vol > eps)
+            safe_vol = np.where(mask, vol, 1.0)
+            log_vol_over_V = np.log2(np.maximum(safe_vol / max(graph_volume, eps), eps))
+            log_vol = np.log2(np.maximum(safe_vol, eps))
+            boundary = -(cut / max(graph_volume, eps)) * log_vol_over_V
+            internal = -((dlogd - safe_vol * log_vol) / max(graph_volume, eps))
+            return np.where(mask, boundary + internal, 0.0)
+
+        # Per-candidate "before" using existing per-cluster stats.
+        cand_active = self.active[candidates]
+        cand_vol_before = self.volume[candidates]
+        cand_cut_before = self.cut[candidates]
+        cand_dlogd_before = self.degree_log_degree[candidates]
+        target_before = np.where(
+            cand_active,
+            _cluster_entropy_vec(cand_vol_before, cand_cut_before, cand_dlogd_before),
+            0.0,
+        )
+
+        source_before = self.cluster_entropy(source)
+        source_after = self.cluster_entropy_values(
+            self.volume[source] - degree,
+            self.cut[source] - degree + 2.0 * w_source,
+            self.degree_log_degree[source] - node_dlogd,
+        )
+
+        # Per-candidate "after" with `node` now in the candidate cluster.
+        cand_vol_after = cand_vol_before + degree
+        cand_cut_after = cand_cut_before + degree - 2.0 * w_to_cand
+        cand_dlogd_after = cand_dlogd_before + node_dlogd
+        target_after = _cluster_entropy_vec(cand_vol_after, cand_cut_after, cand_dlogd_after)
+
+        deltas = source_after + target_after - source_before - target_before
+        # Source-to-source is a no-op.
+        same_as_source = candidates == source
+        deltas = np.where(same_as_source, 0.0, deltas)
+        return deltas.astype(float)
+
     def apply_move(self, node: int, target: int) -> float:
         delta = self.move_delta(node, target)
         source = int(self.labels[node])
@@ -351,20 +430,36 @@ def local_move_incremental(
     state = IncrementalSEState(graph, init_labels)
     rng = np.random.default_rng(seed)
 
+    # Try the numba-jitted kernel; fall back to numpy-batched if numba
+    # unavailable or compilation fails.
+    try:
+        from .numba_kernel import numba_move_delta_batch
+        # Warm up the kernel so the first user-visible call doesn't
+        # include compile time.
+        if graph.n_nodes:
+            warm_cands = np.asarray(
+                state.candidate_clusters(0, allow_new_cluster=allow_new_cluster),
+                dtype=np.int64,
+            )
+            if warm_cands.size:
+                numba_move_delta_batch(state, 0, warm_cands)
+        delta_fn = numba_move_delta_batch
+    except Exception:
+        delta_fn = lambda s, n, c: s.move_delta_batch(n, c)
+
     for _ in range(max_passes):
         changed = False
         for node in rng.permutation(graph.n_nodes):
             current = int(state.labels[node])
-            best_target = current
-            best_delta = 0.0
-            for target in state.candidate_clusters(int(node), allow_new_cluster=allow_new_cluster):
-                if target == current:
-                    continue
-                delta = state.move_delta(int(node), int(target))
-                if delta < best_delta - 1e-12:
-                    best_delta = delta
-                    best_target = int(target)
-            if best_target != current:
+            cands = state.candidate_clusters(int(node), allow_new_cluster=allow_new_cluster)
+            if not cands:
+                continue
+            cand_arr = np.asarray(cands, dtype=np.int64)
+            deltas = delta_fn(state, int(node), cand_arr)
+            best_idx = int(np.argmin(deltas))
+            best_target = int(cand_arr[best_idx])
+            best_delta = float(deltas[best_idx])
+            if best_target != current and best_delta < -1e-12:
                 state.apply_move(int(node), best_target)
                 changed = True
         if not changed:
@@ -507,6 +602,149 @@ def multistart_incremental_se_heuristic(
             init_labels=labels,
             max_passes=max_passes,
             seed=seed + i,
+        )
+        if entropy < best_entropy:
+            best_entropy = entropy
+            best_labels = candidate_labels
+    assert best_labels is not None
+    return best_labels, best_entropy
+
+
+def _spectral_seed(
+    graph: "SparseGraph",
+    target_clusters: int,
+    seed: int,
+) -> np.ndarray | None:
+    """Top-K Laplacian eigenvectors → k-means → init labels.
+
+    Returns ``None`` if the spectral computation fails (e.g.,
+    disconnected graph at small N, or scipy/sklearn unavailable);
+    callers should fall back to random initialisation.
+    """
+
+    try:
+        import scipy.sparse as sp
+        from scipy.sparse.linalg import eigsh
+        from sklearn.cluster import KMeans
+    except ImportError:
+        return None
+
+    n = graph.n_nodes
+    if target_clusters >= n:
+        return None
+    rows = []
+    cols = []
+    vals = []
+    for node in range(n):
+        nbrs = graph.neighbors[node]
+        ws = graph.weights[node]
+        if nbrs.size:
+            rows.append(np.full(nbrs.size, node, dtype=np.int64))
+            cols.append(nbrs.astype(np.int64))
+            vals.append(ws.astype(float))
+    if not rows:
+        return None
+    A = sp.coo_matrix(
+        (np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+        shape=(n, n),
+    ).tocsr()
+    deg = np.asarray(A.sum(axis=1)).flatten()
+    if (deg <= 0).any():
+        return None
+    d_inv_sqrt = 1.0 / np.sqrt(np.maximum(deg, 1e-12))
+    D_inv_sqrt = sp.diags(d_inv_sqrt)
+    # L_sym = I - D^{-1/2} A D^{-1/2}; we want its smallest eigenvalues,
+    # which correspond to the largest eigenvalues of D^{-1/2} A D^{-1/2}.
+    A_norm = D_inv_sqrt @ A @ D_inv_sqrt
+    try:
+        # Largest-magnitude eigvecs of A_norm = smallest of L_sym.
+        _, V = eigsh(A_norm, k=target_clusters, which="LA")
+    except Exception:
+        return None
+    # Drop the trivial constant eigenvector (always close to 1).
+    # Use rows of V as embeddings, k-means cluster them.
+    try:
+        km = KMeans(n_clusters=target_clusters, random_state=seed, n_init=4)
+        labels = km.fit_predict(V).astype(np.int32)
+    except Exception:
+        return None
+    if int(np.unique(labels).size) < 2:
+        return None
+    return labels
+
+
+def constrained_k_multistart(
+    adj,
+    target_clusters: int,
+    starts: int = 8,
+    max_passes: int = 20,
+    seed: int = 0,
+    spectral_init: bool = False,
+) -> tuple[np.ndarray, float]:
+    """Multistart SE local search constrained to exactly $K$ clusters.
+
+    Idea **2.1'** in the paper's NEXT_STEPS roadmap. Each restart
+    initialises with a random partition into ``target_clusters``
+    non-empty clusters; ``local_move_incremental`` is run with
+    ``allow_new_cluster=False`` so the optimiser cannot grow $K$.
+    The resulting partition is a local SE optimum *at*
+    $K=K_\\text{target}$ — by construction, the multistart kernel
+    never visits the over-fragmented $K_\\text{local}\\!\\gg\\!K$
+    minimum that ``SEClust-TargetK`` then has to merge down from.
+
+    With ``spectral_init=True`` (default), one of the restarts uses
+    the top-$K$ normalised-Laplacian eigenvectors clustered by
+    $k$-means as its initial partition (idea **003** in the
+    SEClust paper's idea_lib). This typically gives a
+    head-start of $0.1$-$1$ bit of SE relative to a random
+    initialisation on graphs with strong cluster structure.
+
+    Returns the labels and 2D structural entropy of the best restart.
+    """
+
+    if target_clusters < 1:
+        raise ValueError("target_clusters must be >= 1")
+
+    if isinstance(adj, SparseGraph):
+        graph = adj
+    else:
+        graph = SparseGraph.from_adjacency(adj)
+    n_nodes = graph.n_nodes
+    if target_clusters > n_nodes:
+        raise ValueError("target_clusters exceeds number of nodes")
+    rng = np.random.default_rng(seed)
+
+    def _balanced_random(k: int) -> np.ndarray:
+        """Random partition into exactly k non-empty clusters."""
+
+        labels = np.empty(n_nodes, dtype=np.int32)
+        # Seed each cluster with at least one node so no cluster starts empty.
+        seed_indices = rng.permutation(n_nodes)[:k]
+        labels[seed_indices] = np.arange(k, dtype=np.int32)
+        # Distribute the rest uniformly at random.
+        rest_mask = np.ones(n_nodes, dtype=bool)
+        rest_mask[seed_indices] = False
+        labels[rest_mask] = rng.integers(0, k, size=int(rest_mask.sum()), dtype=np.int32)
+        return labels
+
+    # Seeds: optionally one spectral seed + (starts-1) random.
+    seeds_list: list[np.ndarray] = []
+    if spectral_init and target_clusters >= 2:
+        spectral = _spectral_seed(graph, target_clusters, seed=seed)
+        if spectral is not None and int(np.unique(spectral).size) >= 2:
+            seeds_list.append(spectral)
+    while len(seeds_list) < starts:
+        seeds_list.append(_balanced_random(target_clusters))
+
+    best_labels: np.ndarray | None = None
+    best_entropy = float("inf")
+    for i, init_labels in enumerate(seeds_list):
+        candidate_labels, entropy = local_move_incremental(
+            graph,
+            init_labels=init_labels,
+            max_passes=max_passes,
+            seed=seed + i,
+            allow_new_cluster=False,
         )
         if entropy < best_entropy:
             best_entropy = entropy

@@ -860,6 +860,17 @@ def run_seclust(
             max_passes=SECLUST_MAX_PASSES,
             seed=seed,
         )
+    elif algorithm == "SEClust-ConstrainedK":
+        from glass.seclust import constrained_k_multistart
+        from glass.seclust.heuristics import ClusteringResult
+        labels, entropy = constrained_k_multistart(
+            case.adjacency,
+            target_clusters=case.k or 2,
+            starts=SECLUST_STARTS,
+            max_passes=SECLUST_MAX_PASSES,
+            seed=seed,
+        )
+        result = ClusteringResult(entropy=entropy, labels=labels, method="seclust-constrained-k")
     else:
         result = cluster_graph(
             case.adjacency,
@@ -1013,7 +1024,13 @@ def run_benchmark(seeds: list[int] | None = None) -> list[dict[str, object]]:
     cases = {case.name: case for case in get_cases()}
     rows: list[dict[str, object]] = []
 
-    seclust_variants = ["SEClust-Auto", "SEClust-Tree", "SEClust-TargetK", "SEClust-MultiLevel"]
+    seclust_variants = [
+        "SEClust-Auto",
+        "SEClust-Tree",
+        "SEClust-TargetK",
+        "SEClust-MultiLevel",
+        "SEClust-ConstrainedK",
+    ]
     cells_per_seed = sum(len(algos) + len(seclust_variants) for algos in SYNTHETIC_BASELINES.values())
     cells_per_seed += sum(len(algos) + len(seclust_variants) for algos in REAL_WORLD_BASELINES.values())
     total_cells = cells_per_seed * len(seeds)

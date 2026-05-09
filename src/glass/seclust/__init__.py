@@ -38,6 +38,7 @@ from .hierarchy import (
 from .incremental import (
     IncrementalSEState,
     SparseGraph,
+    constrained_k_multistart,
     local_move_incremental,
     multistart_incremental_se_heuristic,
 )
@@ -70,6 +71,7 @@ __all__ = [
     "cluster_graph",
     "coding_tree_hierarchy_levels",
     "compare_on_dataset",
+    "constrained_k_multistart",
     "dasgupta_cost",
     "dendrogram_purity",
     "hierarchy_to_lca_size",
