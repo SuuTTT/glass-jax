@@ -1,8 +1,10 @@
 """SEClust benchmark against previously reported baselines.
 
 This script mirrors the report style of ``benchmark_sbm_20260506.md`` and
-``real_world_comparison_20260507.md``. Baseline rows are copied from those
-reports; only SEClust is executed here.
+``real_world_comparison_20260507.md``. Baseline rows for synthetic datasets
+mix executed runs (Louvain/Leiden/Infomap/Glass-JAX) and SEClust variants.
+Real-world datasets now use a sparse pipeline (no dense materialization),
+so Cora / Citeseer / Photo are executed end-to-end.
 """
 
 from __future__ import annotations
@@ -21,47 +23,59 @@ import jax.numpy as jnp
 import networkx as nx
 import optax
 import numpy as np
+import scipy.sparse as sp
 from community import community_louvain
 import infomap
 import igraph
 import leidenalg
+from tqdm import tqdm
 
 from glass.objectives.map_equation import soft_map_equation
 from glass.objectives.modularity import soft_modularity
 from glass.solvers.spectral import spectral_embedding
 
-from glass.seclust import IncrementalSEState, SparseGraph, cluster_graph, hierarchical_se_clustering, structural_entropy
+from glass.seclust import (
+    IncrementalSEState,
+    SparseGraph,
+    cluster_graph,
+    hierarchical_se_clustering,
+    sparse_structural_entropy,
+    structural_entropy,
+)
 
 
-TIME_LIMIT_SECONDS = 180.0
+TIME_LIMIT_SECONDS = 600.0
 SECLUST_STARTS = 6
 SECLUST_MAX_PASSES = 10
 SECLUST_SEED = 42
-MAX_DENSE_REAL_WORLD_NODES = 4000
 
 
 @dataclass(frozen=True)
 class DatasetCase:
     name: str
-    adjacency: np.ndarray | None
+    adjacency: object | None  # np.ndarray | scipy.sparse | SparseGraph
     labels: np.ndarray | None
     k: int | None
     source: str
+    is_sparse: bool = False
+    features: np.ndarray | None = None
 
+
+HCSE_DENSE_MAX_NODES = 5000  # HCSE (a.k.a. SEP package) build_coding_tree is ~O(N^3); skip beyond this.
 
 SYNTHETIC_BASELINES = {
-    "Karate": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
-    "Caveman (10x20)": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
-    "SBM (N=100)": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
-    "SBM (N=500)": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
-    "SBM (N=1000)": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"],
+    "Karate": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)", "HCSE"],
+    "Caveman (10x20)": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)", "HCSE"],
+    "SBM (N=100)": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)", "HCSE"],
+    "SBM (N=500)": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)", "HCSE"],
+    "SBM (N=1000)": ["Louvain", "Leiden", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)", "HCSE"],
 }
 
 
 REAL_WORLD_BASELINES = {
-    "Cora": ["Louvain (Topology)", "LSEnet (Features + DSI)", "Glass-SE (Pure Topology)"],
-    "Citeseer": ["Louvain (Topology)", "LSEnet (Features + DSI)", "Glass-SE (Pure Topology)"],
-    "Photo": [],
+    "Cora": ["Louvain", "Leiden", "Infomap", "HCSE", "LSEnet", "Glass-SE GNN"],
+    "Citeseer": ["Louvain", "Leiden", "Infomap", "HCSE", "LSEnet", "Glass-SE GNN"],
+    "Photo": ["Louvain", "Leiden", "Infomap", "HCSE", "LSEnet", "Glass-SE GNN"],
 }
 
 
@@ -120,9 +134,11 @@ def real_world_unavailable(name: str) -> DatasetCase:
 
 
 def real_world_graph(name: str) -> DatasetCase:
+    """Load a PyG dataset directly into a SparseGraph (no dense materialization)."""
+
     try:
         from torch_geometric.datasets import Amazon, Planetoid
-        from torch_geometric.utils import to_dense_adj, to_undirected
+        from torch_geometric.utils import to_undirected
     except Exception as exc:
         return DatasetCase(name, None, None, None, f"unavailable: torch_geometric import failed: {exc}")
 
@@ -140,20 +156,17 @@ def real_world_graph(name: str) -> DatasetCase:
     n_nodes = int(data.num_nodes)
     k = int(dataset.num_classes)
     labels = data.y.cpu().numpy().astype(np.int32)
-    if n_nodes > MAX_DENSE_REAL_WORLD_NODES:
-        dense_gib = (n_nodes * n_nodes * 8) / (1024**3)
-        return DatasetCase(
-            name,
-            None,
-            labels,
-            k,
-            f"skipped before dense materialization: {n_nodes} nodes would require ~{dense_gib:.2f} GiB dense adjacency",
-        )
-
-    edge_index = to_undirected(data.edge_index)
-    adj = to_dense_adj(edge_index, max_num_nodes=n_nodes)[0].cpu().numpy().astype(float)
-    np.fill_diagonal(adj, 0.0)
-    return DatasetCase(name, adj, labels, k, "torch_geometric")
+    edge_index = to_undirected(data.edge_index).cpu().numpy().astype(np.int64)
+    graph = SparseGraph.from_edge_index(edge_index, num_nodes=n_nodes)
+    features = None
+    if hasattr(data, "x") and data.x is not None:
+        features = data.x.cpu().numpy().astype(np.float32)
+    return DatasetCase(
+        name, graph, labels, k,
+        "torch_geometric (sparse)",
+        is_sparse=True,
+        features=features,
+    )
 
 
 def get_cases() -> list[DatasetCase]:
@@ -236,37 +249,74 @@ def clustering_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(total / y_true.size)
 
 
-def run_louvain(adj: np.ndarray, seed: int = 42) -> tuple[np.ndarray, float]:
+def _adj_as_csr(adj) -> sp.csr_matrix:
+    """Coerce input to CSR without unnecessary copies."""
+
+    if isinstance(adj, SparseGraph):
+        n = adj.n_nodes
+        rows = []
+        cols = []
+        vals = []
+        for node in range(n):
+            nbrs = adj.neighbors[node]
+            ws = adj.weights[node]
+            if nbrs.size:
+                rows.append(np.full(nbrs.size, node, dtype=np.int64))
+                cols.append(nbrs.astype(np.int64))
+                vals.append(ws.astype(float))
+        if rows:
+            row = np.concatenate(rows)
+            col = np.concatenate(cols)
+            data = np.concatenate(vals)
+        else:
+            row = np.zeros(0, dtype=np.int64)
+            col = np.zeros(0, dtype=np.int64)
+            data = np.zeros(0, dtype=float)
+        return sp.coo_matrix((data, (row, col)), shape=(n, n)).tocsr()
+    if sp.issparse(adj):
+        return adj.tocsr()
+    return sp.csr_matrix(np.asarray(adj, dtype=float))
+
+
+def run_louvain(adj, seed: int = 42) -> tuple[np.ndarray, float]:
     start = time.time()
-    graph = nx.from_numpy_array(adj)
+    csr = _adj_as_csr(adj)
+    graph = nx.from_scipy_sparse_array(csr)
     partition = community_louvain.best_partition(graph, random_state=seed)
-    labels = np.array([partition[i] for i in range(len(graph.nodes))], dtype=np.int32)
+    n_nodes = csr.shape[0]
+    labels = np.array([partition[i] for i in range(n_nodes)], dtype=np.int32)
     return labels, time.time() - start
 
 
-def run_leiden(adj: np.ndarray, seed: int = 42) -> tuple[np.ndarray, float]:
+def run_leiden(adj, seed: int = 42) -> tuple[np.ndarray, float]:
     start = time.time()
-    sources, targets = np.triu(adj).nonzero()
-    weights = adj[sources, targets]
-    edges = list(zip(sources, targets))
-    g = igraph.Graph(n=adj.shape[0], edges=edges, directed=False)
-    g.es['weight'] = weights
-    partition = leidenalg.find_partition(g, leidenalg.ModularityVertexPartition, weights=weights, seed=seed)
-    labels = np.zeros(adj.shape[0], dtype=np.int32)
+    csr = _adj_as_csr(adj)
+    coo = sp.triu(csr, k=1).tocoo()
+    sources = coo.row.astype(np.int64)
+    targets = coo.col.astype(np.int64)
+    weights = coo.data.astype(float)
+    edges = list(zip(sources.tolist(), targets.tolist()))
+    g = igraph.Graph(n=csr.shape[0], edges=edges, directed=False)
+    g.es['weight'] = weights.tolist()
+    partition = leidenalg.find_partition(g, leidenalg.ModularityVertexPartition, weights=weights.tolist(), seed=seed)
+    labels = np.zeros(csr.shape[0], dtype=np.int32)
     for i, cluster in enumerate(partition):
         for node in cluster:
             labels[node] = i
     return labels, time.time() - start
 
 
-def run_infomap(adj: np.ndarray, seed: int = 42) -> tuple[np.ndarray, float]:
+def run_infomap(adj, seed: int = 42) -> tuple[np.ndarray, float]:
     start = time.time()
-    model = infomap.Infomap(f"--two-level --silent --seed {seed}")
-    rows, cols = np.where(adj > 0)
-    for row, col in zip(rows, cols):
-        model.add_link(int(row), int(col), float(adj[row, col]))
+    csr = _adj_as_csr(adj)
+    coo = csr.tocoo()
+    # Infomap requires a strictly positive seed; map 0 -> 1.
+    infomap_seed = max(1, int(seed))
+    model = infomap.Infomap(f"--two-level --silent --seed {infomap_seed}")
+    for row, col, value in zip(coo.row, coo.col, coo.data):
+        model.add_link(int(row), int(col), float(value))
     model.run()
-    labels = np.zeros(adj.shape[0], dtype=np.int32)
+    labels = np.zeros(csr.shape[0], dtype=np.int32)
     for node in model.tree:
         if node.is_leaf:
             labels[node.node_id] = node.module_id - 1
@@ -344,13 +394,161 @@ def run_glass_jax_multistart(
     return np.array(jnp.argmax(S, axis=-1)), duration
 
 
-def run_synthetic_baseline(case: DatasetCase, algorithm: str) -> dict[str, object]:
+def _to_dense(adj) -> np.ndarray:
+    if isinstance(adj, SparseGraph) or sp.issparse(adj):
+        return _adj_as_csr(adj).toarray().astype(float)
+    return np.asarray(adj, dtype=float)
+
+
+def run_hcse(adj, k_target: int, seed: int = 42) -> tuple[np.ndarray, float]:
+    """Run the HCSE coding-tree baseline (Pan, Zheng, Fan 2021) at depth k_target.
+
+    The implementation lives in ``official_baselines/SEP/SEPN/codingTree.py``
+    (the SEP package vendors HCSE under that name); the algorithm itself is
+    HCSE / k-HCSE.
+    """
+
+    from glass.seclust.benchmark_sep import run_official_sep_coding_tree
+
+    dense = _to_dense(adj)
+    start = time.time()
+    result = run_official_sep_coding_tree(dense, k=max(2, int(k_target)))
+    return np.asarray(result.labels, dtype=np.int32), time.time() - start
+
+
+def run_glass_se_gnn(
+    adj,
+    features: np.ndarray,
+    k: int,
+    n_iters: int = 120,
+    hidden_dim: int = 32,
+    lr: float = 0.01,
+    seed: int = 42,
+) -> tuple[np.ndarray, float]:
+    """Glass-SE GNN: a single-layer GCN encoder over the 2D SE loss.
+
+    Same input as ``run_lsenet_proxy`` (adjacency, features, target K)
+    and the same loss; replaces the linear projection with a GCN, which
+    is the natural mid-point between the LSEnet proxy and full LSEnet.
+    """
+
+    from glass.objectives.structural_entropy import two_dimensional_structural_entropy
+    from glass.models.gnn_se import GNNEncoder
+
+    dense = _to_dense(adj)
+    n_nodes = dense.shape[0]
+    adj_jax = jnp.array(dense)
+    features_jax = jnp.array(features)
+
+    model = GNNEncoder(hidden_dim=hidden_dim, num_communities=k)
+    key = jax.random.PRNGKey(seed)
+    params = model.init(key, features_jax, adj_jax)
+    optimizer = optax.adam(lr)
+    opt_state = optimizer.init(params)
+
+    @jax.jit
+    def step(params, opt_state):
+        def loss_fn(p):
+            logits = model.apply(p, features_jax, adj_jax)
+            S = jax.nn.softmax(logits, axis=-1)
+            return two_dimensional_structural_entropy(adj_jax, S, is_logits=False)
+        loss, grads = jax.value_and_grad(loss_fn)(params)
+        updates, opt_state2 = optimizer.update(grads, opt_state)
+        new_params = optax.apply_updates(params, updates)
+        return new_params, opt_state2, loss
+
+    start = time.time()
+    for _ in range(n_iters):
+        params, opt_state, _ = step(params, opt_state)
+    logits = model.apply(params, features_jax, adj_jax)
+    labels = np.asarray(jnp.argmax(logits, axis=-1)).astype(np.int32)
+    return labels, time.time() - start
+
+
+def run_lsenet_proxy(
+    adj,
+    features: np.ndarray,
+    k: int,
+    n_iters: int = 120,
+    n_starts: int = 2,
+    lr: float = 0.05,
+    seed: int = 42,
+) -> tuple[np.ndarray, float]:
+    """Feature-aware proxy for LSEnet: optimize 2D SE through a linear projection of features."""
+
+    from glass.objectives.structural_entropy import two_dimensional_structural_entropy
+
+    dense = _to_dense(adj)
+    n_nodes = dense.shape[0]
+    n_features = int(features.shape[1])
+    adj_jax = jnp.array(dense)
+    features_jax = jnp.array(features)
+
+    key = jax.random.PRNGKey(seed)
+    keys = jax.random.split(key, n_starts)
+    W_inits = jax.vmap(lambda rng: jax.random.normal(rng, (n_features, k)) * 0.1)(keys)
+
+    optimizer = optax.adam(lr)
+
+    def optimize_single(W_init):
+        opt_state = optimizer.init(W_init)
+
+        def step(state, temp):
+            W, opt_state = state
+
+            def loss_fn(w):
+                logits = jnp.dot(features_jax, w)
+                S = jax.nn.softmax(logits / temp, axis=-1)
+                return two_dimensional_structural_entropy(adj_jax, S, is_logits=False)
+
+            (loss, grads) = jax.value_and_grad(loss_fn)(W)
+            updates, opt_state = optimizer.update(grads, opt_state)
+            W = optax.apply_updates(W, updates)
+            return (W, opt_state), loss
+
+        temps = jnp.linspace(1.0, 0.01, n_iters)
+        final_state, _ = jax.lax.scan(step, (W_init, opt_state), temps)
+        final_W = final_state[0]
+        logits = jnp.dot(features_jax, final_W)
+        S_eval = jax.nn.softmax(logits / 0.01, axis=-1)
+        eval_loss = two_dimensional_structural_entropy(adj_jax, S_eval, is_logits=False)
+        return final_W, eval_loss
+
+    vmap_optimize = jax.jit(jax.vmap(optimize_single))
+    _ = vmap_optimize(W_inits)
+    start = time.time()
+    all_final_W, all_final_losses = vmap_optimize(W_inits)
+    all_final_W.block_until_ready()
+    duration = time.time() - start
+
+    best_W = all_final_W[jnp.argmin(all_final_losses)]
+    logits = jnp.dot(features_jax, best_W)
+    S = jax.nn.softmax(logits / 0.01, axis=-1)
+    labels = np.array(jnp.argmax(S, axis=-1))
+    return labels.astype(np.int32), duration
+
+
+def _n_nodes_of(adj) -> int:
+    if isinstance(adj, SparseGraph):
+        return adj.n_nodes
+    if sp.issparse(adj):
+        return int(adj.shape[0])
+    return int(np.asarray(adj).shape[0])
+
+
+def run_synthetic_baseline(
+    case: DatasetCase,
+    algorithm: str,
+    seed: int = SECLUST_SEED,
+) -> dict[str, object]:
+    n_nodes = _n_nodes_of(case.adjacency) if case.adjacency is not None else 0
+    skip_status: str | None = None
     if algorithm == "Louvain":
-        labels, duration = run_louvain(case.adjacency, seed=SECLUST_SEED)
+        labels, duration = run_louvain(case.adjacency, seed=seed)
     elif algorithm == "Leiden":
-        labels, duration = run_leiden(case.adjacency, seed=SECLUST_SEED)
+        labels, duration = run_leiden(case.adjacency, seed=seed)
     elif algorithm == "Infomap":
-        labels, duration = run_infomap(case.adjacency, seed=SECLUST_SEED)
+        labels, duration = run_infomap(case.adjacency, seed=seed)
     elif algorithm == "Glass-Mod (JAX)":
         labels, duration = run_glass_jax_multistart(
             case.adjacency,
@@ -358,7 +556,7 @@ def run_synthetic_baseline(case: DatasetCase, algorithm: str) -> dict[str, objec
             soft_modularity,
             n_iters=120,
             n_starts=2,
-            seed=SECLUST_SEED,
+            seed=seed,
         )
     elif algorithm == "Glass-Map (JAX)":
         labels, duration = run_glass_jax_multistart(
@@ -367,20 +565,71 @@ def run_synthetic_baseline(case: DatasetCase, algorithm: str) -> dict[str, objec
             soft_map_equation,
             n_iters=120,
             n_starts=2,
-            seed=SECLUST_SEED,
+            seed=seed,
         )
+    elif algorithm == "HCSE":
+        if n_nodes > HCSE_DENSE_MAX_NODES:
+            skip_status = f"skipped: HCSE dense build infeasible at N={n_nodes} (>{HCSE_DENSE_MAX_NODES})"
+        else:
+            labels, duration = run_hcse(case.adjacency, k_target=case.k or 2, seed=seed)
+    elif algorithm == "LSEnet":
+        if case.features is None:
+            skip_status = "skipped: LSEnet requires node features"
+        else:
+            labels, duration = run_lsenet_proxy(
+                case.adjacency,
+                case.features,
+                k=case.k,
+                n_iters=120,
+                n_starts=2,
+                seed=seed,
+            )
+    elif algorithm == "Glass-SE GNN":
+        if case.features is None:
+            skip_status = "skipped: Glass-SE GNN requires node features"
+        else:
+            labels, duration = run_glass_se_gnn(
+                case.adjacency,
+                case.features,
+                k=case.k,
+                n_iters=120,
+                seed=seed,
+            )
     else:
         raise ValueError(f"Unknown synthetic baseline {algorithm}")
 
+    if skip_status is not None:
+        return {
+            "dataset": case.name,
+            "algorithm": algorithm,
+            "seed": seed,
+            "ari": None,
+            "nmi": None,
+            "acc": None,
+            "k": None,
+            "modularity": None,
+            "structural_entropy": None,
+            "map_equation": None,
+            "time": None,
+            "estimated_time": None,
+            "se": None,
+            "status": skip_status,
+        }
+
+    if isinstance(case.adjacency, SparseGraph) or sp.issparse(case.adjacency):
+        se_value = sparse_structural_entropy(case.adjacency, labels)
+    else:
+        se_value = structural_entropy(case.adjacency, labels)
     return {
         "dataset": case.name,
         "algorithm": algorithm,
+        "seed": seed,
         "ari": adjusted_rand_index(case.labels, labels),
         "nmi": normalized_mutual_info(case.labels, labels),
         "acc": clustering_accuracy(case.labels, labels),
         "k": int(len(np.unique(labels))),
         "modularity": hard_modularity(case.adjacency, labels),
-        "structural_entropy": structural_entropy(case.adjacency, labels),
+        "structural_entropy": se_value,
         "map_equation": hard_map_equation(case.adjacency, labels),
         "time": duration,
         "estimated_time": None,
@@ -389,7 +638,22 @@ def run_synthetic_baseline(case: DatasetCase, algorithm: str) -> dict[str, objec
     }
 
 
-def hard_modularity(adj: np.ndarray, labels: np.ndarray) -> float:
+def hard_modularity(adj, labels: np.ndarray) -> float:
+    if isinstance(adj, SparseGraph) or sp.issparse(adj):
+        csr = _adj_as_csr(adj)
+        degrees = np.asarray(csr.sum(axis=1)).flatten()
+        volume = float(degrees.sum())
+        if volume <= 1e-12:
+            return 0.0
+        labels = np.asarray(labels)
+        score = 0.0
+        for cluster in np.unique(labels):
+            mask = labels == cluster
+            cluster_degree = float(degrees[mask].sum())
+            sub = csr[mask][:, mask]
+            internal = float(sub.sum())
+            score += internal - (cluster_degree * cluster_degree / volume)
+        return float(score / volume)
     degrees = adj.sum(axis=1)
     volume = float(degrees.sum())
     if volume <= 1e-12:
@@ -413,7 +677,52 @@ def entropy_from_masses(masses: np.ndarray) -> float:
     return float(-np.sum(probs * np.log2(probs)))
 
 
-def hard_map_equation(adj: np.ndarray, labels: np.ndarray) -> float:
+def hard_map_equation(adj, labels: np.ndarray) -> float:
+    if isinstance(adj, SparseGraph) or sp.issparse(adj):
+        csr = _adj_as_csr(adj)
+        degrees = np.asarray(csr.sum(axis=1)).flatten()
+        volume = float(degrees.sum())
+        if volume <= 1e-12:
+            return 0.0
+        pi = degrees / volume
+        labels = np.asarray(labels)
+        # Compute per-node out-of-cluster weight via CSR rows.
+        n = csr.shape[0]
+        out_weight = np.zeros(n, dtype=float)
+        indptr = csr.indptr
+        indices = csr.indices
+        data = csr.data
+        for node in range(n):
+            cid = labels[node]
+            start, end = indptr[node], indptr[node + 1]
+            nbrs = indices[start:end]
+            ws = data[start:end]
+            mismatch = labels[nbrs] != cid
+            if mismatch.any():
+                out_weight[node] = float(ws[mismatch].sum())
+
+        q_values = []
+        module_terms = []
+        for cluster in np.unique(labels):
+            mask = labels == cluster
+            p_module = float(pi[mask].sum())
+            d_mask = degrees[mask]
+            ow = out_weight[mask]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                ratios = np.where(d_mask > 1e-12, ow / np.maximum(d_mask, 1e-12), 0.0)
+            exit_prob = float(np.sum(pi[mask] * ratios))
+            q_values.append(exit_prob)
+            module_terms.append((exit_prob, p_module, pi[mask]))
+
+        q = float(np.sum(q_values))
+        index_term = q * entropy_from_masses(np.asarray(q_values, dtype=float))
+        module_term = 0.0
+        for exit_prob, p_module, node_masses in module_terms:
+            module_mass = exit_prob + p_module
+            if module_mass > 1e-12:
+                module_term += module_mass * entropy_from_masses(np.concatenate([[exit_prob], node_masses]))
+        return float(index_term + module_term)
+
     degrees = adj.sum(axis=1)
     volume = float(degrees.sum())
     if volume <= 1e-12:
@@ -444,9 +753,12 @@ def hard_map_equation(adj: np.ndarray, labels: np.ndarray) -> float:
     return float(index_term + module_term)
 
 
-def estimate_seclust_seconds(adj: np.ndarray) -> float:
+def estimate_seclust_seconds(adj) -> float:
     graph_start = time.time()
-    graph = SparseGraph.from_adjacency(adj)
+    if isinstance(adj, SparseGraph):
+        graph = adj
+    else:
+        graph = SparseGraph.from_adjacency(adj)
     graph_seconds = time.time() - graph_start
     n = graph.n_nodes
     rng = np.random.default_rng(SECLUST_SEED)
@@ -471,11 +783,16 @@ def estimate_seclust_seconds(adj: np.ndarray) -> float:
     return float((graph_seconds * SECLUST_STARTS + per_eval * estimated_evaluations) * 1.25)
 
 
-def run_seclust(case: DatasetCase, algorithm: str = "SEClust-Auto") -> dict[str, object]:
+def run_seclust(
+    case: DatasetCase,
+    algorithm: str = "SEClust-Auto",
+    seed: int = SECLUST_SEED,
+) -> dict[str, object]:
     if case.adjacency is None or case.labels is None:
         return {
             "dataset": case.name,
             "algorithm": algorithm,
+            "seed": seed,
             "ari": None,
             "nmi": None,
             "acc": None,
@@ -490,16 +807,11 @@ def run_seclust(case: DatasetCase, algorithm: str = "SEClust-Auto") -> dict[str,
         }
 
     estimate = estimate_seclust_seconds(case.adjacency)
-    if case.source == "torch_geometric" and case.adjacency.shape[0] > 2000:
-        # The local move estimator captures sparse delta scoring but misses the
-        # dense final metric/scoring overhead that dominates citation graphs.
-        # Use an empirical dense guard so real-world runs are skipped before
-        # exceeding the 3 minute benchmark contract.
-        estimate = max(estimate, 4.0e-5 * float(case.adjacency.shape[0] ** 2))
     if estimate > TIME_LIMIT_SECONDS:
         return {
             "dataset": case.name,
             "algorithm": algorithm,
+            "seed": seed,
             "ari": None,
             "nmi": None,
             "acc": None,
@@ -520,18 +832,18 @@ def run_seclust(case: DatasetCase, algorithm: str = "SEClust-Auto") -> dict[str,
             target_clusters=case.k,
             starts=SECLUST_STARTS,
             max_passes=SECLUST_MAX_PASSES,
-            seed=SECLUST_SEED,
+            seed=seed,
         )
     elif algorithm == "SEClust-TargetK":
         from glass.seclust.incremental import multistart_incremental_se_heuristic
         from glass.seclust.hierarchy import merge_hierarchy_levels, select_hierarchy_level
         from glass.seclust.heuristics import ClusteringResult
-        
+
         base_labels, _ = multistart_incremental_se_heuristic(
             case.adjacency,
             starts=SECLUST_STARTS,
             max_passes=SECLUST_MAX_PASSES,
-            seed=SECLUST_SEED,
+            seed=seed,
         )
         levels = merge_hierarchy_levels(case.adjacency, base_labels, min_clusters=case.k)
         selected = select_hierarchy_level(levels, target_clusters=case.k)
@@ -540,6 +852,14 @@ def run_seclust(case: DatasetCase, algorithm: str = "SEClust-Auto") -> dict[str,
             labels=selected.labels,
             method="seclust-target-k",
         )
+    elif algorithm == "SEClust-MultiLevel":
+        from glass.seclust import multilevel_se_clustering
+        result = multilevel_se_clustering(
+            case.adjacency,
+            starts=SECLUST_STARTS,
+            max_passes=SECLUST_MAX_PASSES,
+            seed=seed,
+        )
     else:
         result = cluster_graph(
             case.adjacency,
@@ -547,12 +867,13 @@ def run_seclust(case: DatasetCase, algorithm: str = "SEClust-Auto") -> dict[str,
             exact_max_nodes=9,
             heuristic_starts=SECLUST_STARTS,
             max_passes=SECLUST_MAX_PASSES,
-            seed=SECLUST_SEED,
+            seed=seed,
         )
     elapsed = time.time() - start
     return {
         "dataset": case.name,
         "algorithm": algorithm,
+        "seed": seed,
         "ari": adjusted_rand_index(case.labels, result.labels),
         "nmi": normalized_mutual_info(case.labels, result.labels),
         "acc": clustering_accuracy(case.labels, result.labels),
@@ -587,6 +908,20 @@ def maybe_bold(text: str, enabled: bool) -> str:
     return f"**{text}**" if enabled else text
 
 
+def _render_metric(row: dict[str, object], field: str, digits: int = 3) -> str:
+    """Render a metric as either a single value or 'mean ± std' if std > 0.
+
+    Falls back to the bare ``field`` value when the row was produced by a
+    single-seed run (i.e. ``f_std`` is missing). On aggregated rows the
+    bare ``field`` already holds the mean, so passing the same field
+    through :func:`fmt` would lose the std.
+    """
+
+    if f"{field}_std" in row:
+        return fmt_mean_std(row.get(f"{field}_mean", row.get(field)), row.get(f"{field}_std"), digits)
+    return fmt(row.get(field), digits)
+
+
 def synthetic_table(rows: list[dict[str, object]]) -> str:
     lines = [
         "| Dataset | Algorithm | ACC | NMI | ARI | K | Modularity | StructuralEntropy | MapEquation | Time (s) | Estimate (s) | Graph (N, E, True K*) |",
@@ -607,15 +942,15 @@ def synthetic_table(rows: list[dict[str, object]]) -> str:
                     [
                         dataset if i == 0 else "",
                         str(row["algorithm"]),
-                        maybe_bold(fmt(row.get("acc")), i in acc_best),
-                        maybe_bold(fmt(row.get("nmi")), i in nmi_best),
-                        maybe_bold(fmt(row.get("ari")), i in ari_best),
+                        maybe_bold(_render_metric(row, "acc"), i in acc_best),
+                        maybe_bold(_render_metric(row, "nmi"), i in nmi_best),
+                        maybe_bold(_render_metric(row, "ari"), i in ari_best),
                         fmt(row.get("k"), 0),
-                        maybe_bold(fmt(row.get("modularity")), i in modularity_best),
-                        maybe_bold(fmt(row.get("structural_entropy")), i in se_best),
-                        maybe_bold(fmt(row.get("map_equation")), i in map_best),
-                        fmt(row.get("runtime_seconds"), 4),
-                        fmt(row.get("estimated_runtime_seconds"), 1),
+                        maybe_bold(_render_metric(row, "modularity"), i in modularity_best),
+                        maybe_bold(_render_metric(row, "structural_entropy"), i in se_best),
+                        maybe_bold(_render_metric(row, "map_equation"), i in map_best),
+                        _render_metric(row, "runtime_seconds", 4),
+                        _render_metric(row, "estimated_runtime_seconds", 1),
                         f"{row.get('n_nodes')}, {row.get('n_edges')}, {row.get('true_k')}" if row.get("n_nodes") else "skip",
                     ]
                 )
@@ -644,14 +979,14 @@ def real_world_table(rows: list[dict[str, object]]) -> str:
                     [
                         dataset if i == 0 else "",
                         str(row["algorithm"]),
-                        maybe_bold(fmt(row.get("acc")), i in acc_best),
-                        maybe_bold(fmt(row.get("nmi")), i in nmi_best),
-                        maybe_bold(fmt(row.get("ari")), i in ari_best),
+                        maybe_bold(_render_metric(row, "acc"), i in acc_best),
+                        maybe_bold(_render_metric(row, "nmi"), i in nmi_best),
+                        maybe_bold(_render_metric(row, "ari"), i in ari_best),
                         fmt(row.get("k"), 0),
-                        maybe_bold(fmt(row.get("modularity")), i in modularity_best),
-                        maybe_bold(fmt(row.get("structural_entropy")), i in se_best),
-                        maybe_bold(fmt(row.get("map_equation")), i in map_best),
-                        fmt(row.get("runtime_seconds"), 4),
+                        maybe_bold(_render_metric(row, "modularity"), i in modularity_best),
+                        maybe_bold(_render_metric(row, "structural_entropy"), i in se_best),
+                        maybe_bold(_render_metric(row, "map_equation"), i in map_best),
+                        _render_metric(row, "runtime_seconds", 4),
                         f"{row.get('n_nodes')}, {row.get('n_edges')}, {row.get('true_k')}" if row.get("n_nodes") else "skip",
                     ]
                 )
@@ -660,62 +995,106 @@ def real_world_table(rows: list[dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
-def run_benchmark() -> list[dict[str, object]]:
+def run_benchmark(seeds: list[int] | None = None) -> list[dict[str, object]]:
+    """Run the full benchmark, optionally over a list of seeds.
+
+    With ``seeds=None`` or a single-element list, behaves as before
+    (one row per (dataset, algorithm)). With multiple seeds, every
+    cell is executed once per seed and each row is tagged with the
+    seed used. Aggregation to mean/std is done downstream by
+    :func:`aggregate_rows`.
+    """
+
+    if seeds is None:
+        seeds = [SECLUST_SEED]
+    if not seeds:
+        raise ValueError("seeds must contain at least one integer")
+
     cases = {case.name: case for case in get_cases()}
     rows: list[dict[str, object]] = []
-    for dataset, algorithms in SYNTHETIC_BASELINES.items():
-        for algorithm in algorithms:
-            rows.append(run_synthetic_baseline(cases[dataset], algorithm))
-        print(f"Running SEClust on {dataset}...", flush=True)
-        rows.append(run_seclust(cases[dataset]))
-        print(f"Running SEClust-Tree on {dataset}...", flush=True)
-        rows.append(run_seclust(cases[dataset], algorithm="SEClust-Tree"))
-        print(f"Running SEClust-TargetK on {dataset}...", flush=True)
-        rows.append(run_seclust(cases[dataset], algorithm="SEClust-TargetK"))
 
-    for dataset, algorithms in REAL_WORLD_BASELINES.items():
-        for algorithm in algorithms:
-            rows.append(
-                {
-                    "dataset": dataset,
-                    "algorithm": algorithm,
-                    "acc": None,
-                    "nmi": None,
-                    "ari": None,
-                    "k": None,
-                    "modularity": None,
-                    "structural_entropy": None,
-                    "map_equation": None,
-                    "time": None,
-                    "estimated_time": None,
-                    "se": None,
-                    "status": "baseline_imported",
-                }
-            )
-        print(f"Running SEClust on {dataset}...", flush=True)
-        rows.append(run_seclust(cases[dataset]))
-        print(f"Running SEClust-Tree on {dataset}...", flush=True)
-        rows.append(run_seclust(cases[dataset], algorithm="SEClust-Tree"))
-        print(f"Running SEClust-TargetK on {dataset}...", flush=True)
-        rows.append(run_seclust(cases[dataset], algorithm="SEClust-TargetK"))
+    seclust_variants = ["SEClust-Auto", "SEClust-Tree", "SEClust-TargetK", "SEClust-MultiLevel"]
+    cells_per_seed = sum(len(algos) + len(seclust_variants) for algos in SYNTHETIC_BASELINES.values())
+    cells_per_seed += sum(len(algos) + len(seclust_variants) for algos in REAL_WORLD_BASELINES.values())
+    total_cells = cells_per_seed * len(seeds)
+    pbar = tqdm(total=total_cells, desc="Benchmark", unit="cell", dynamic_ncols=True)
+
+    def _run_seclust_named(case: DatasetCase, algorithm: str, seed: int) -> dict[str, object]:
+        if algorithm == "SEClust-Auto":
+            return run_seclust(case, seed=seed)
+        return run_seclust(case, algorithm=algorithm, seed=seed)
+
+    for seed in seeds:
+        for dataset, algorithms in SYNTHETIC_BASELINES.items():
+            case = cases[dataset]
+            for algorithm in algorithms:
+                pbar.set_postfix_str(f"seed={seed} {dataset} / {algorithm}")
+                rows.append(run_synthetic_baseline(case, algorithm, seed=seed))
+                pbar.update(1)
+            for variant in seclust_variants:
+                pbar.set_postfix_str(f"seed={seed} {dataset} / {variant}")
+                rows.append(_run_seclust_named(case, variant, seed=seed))
+                pbar.update(1)
+
+        for dataset, algorithms in REAL_WORLD_BASELINES.items():
+            case = cases[dataset]
+            if case.adjacency is None:
+                for algorithm in algorithms:
+                    pbar.set_postfix_str(f"seed={seed} {dataset} / {algorithm} (unavailable)")
+                    rows.append(
+                        {
+                            "dataset": dataset,
+                            "algorithm": algorithm,
+                            "seed": seed,
+                            "acc": None,
+                            "nmi": None,
+                            "ari": None,
+                            "k": None,
+                            "modularity": None,
+                            "structural_entropy": None,
+                            "map_equation": None,
+                            "time": None,
+                            "estimated_time": None,
+                            "se": None,
+                            "status": case.source,
+                        }
+                    )
+                    pbar.update(1)
+            else:
+                for algorithm in algorithms:
+                    pbar.set_postfix_str(f"seed={seed} {dataset} / {algorithm}")
+                    rows.append(run_synthetic_baseline(case, algorithm, seed=seed))
+                    pbar.update(1)
+            for variant in seclust_variants:
+                pbar.set_postfix_str(f"seed={seed} {dataset} / {variant}")
+                rows.append(_run_seclust_named(case, variant, seed=seed))
+                pbar.update(1)
+
+    pbar.close()
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     experiment_id = f"seclust_full_benchmark_{timestamp}"
-    import numpy as np
     for row in rows:
         case = cases[row["dataset"]]
         row["experiment_id"] = experiment_id
         row["true_k"] = case.k
         row["dataset_source"] = case.source
-        row["n_nodes"] = case.adjacency.shape[0] if case.adjacency is not None else None
-        row["n_edges"] = int(np.sum(case.adjacency > 0) / 2) if case.adjacency is not None else None
-        
-        algo = str(row.get("algorithm", ""))
-        if "SEClust" in algo or algo in ["Louvain", "Infomap", "Glass-Mod (JAX)", "Glass-Map (JAX)"]:
-            row["seed"] = SECLUST_SEED
+        if case.adjacency is None:
+            row["n_nodes"] = None
+            row["n_edges"] = None
+        elif isinstance(case.adjacency, SparseGraph):
+            row["n_nodes"] = case.adjacency.n_nodes
+            row["n_edges"] = int(sum(nbrs.size for nbrs in case.adjacency.neighbors) / 2)
+        elif sp.issparse(case.adjacency):
+            row["n_nodes"] = int(case.adjacency.shape[0])
+            row["n_edges"] = int(case.adjacency.nnz / 2)
         else:
-            row["seed"] = None
-            
+            row["n_nodes"] = int(case.adjacency.shape[0])
+            row["n_edges"] = int(np.sum(case.adjacency > 0) / 2)
+
+        # `seed` is set by the runner; keep it as-is. Only ensure it exists.
+        row.setdefault("seed", None)
+
         status_orig = str(row.get("status", "ok"))
         if status_orig.startswith("skipped") or status_orig.startswith("unavailable"):
             row["skip_reason"] = status_orig
@@ -729,46 +1108,170 @@ def run_benchmark() -> list[dict[str, object]]:
         else:
             row["status"] = "ok"
             row["skip_reason"] = None
-            
+
         row["estimated_runtime_seconds"] = row.pop("estimated_time", None)
         row["runtime_seconds"] = row.pop("time", None)
         row["labels_path"] = None
         row.pop("se", None)
-        
+
     return rows
 
 
-def write_report(rows: list[dict[str, object]]) -> Path:
+_NUMERIC_FIELDS = (
+    "acc",
+    "nmi",
+    "ari",
+    "modularity",
+    "structural_entropy",
+    "map_equation",
+    "runtime_seconds",
+    "estimated_runtime_seconds",
+)
+
+
+def aggregate_rows(raw_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Group per-seed rows by (dataset, algorithm) and compute mean/std.
+
+    Each output row contains, for every numeric field ``f``:
+    ``f`` = mean (so existing table renderers keep working),
+    ``f_mean`` = same mean explicitly,
+    ``f_std`` = sample standard deviation across seeds (population
+    std, ddof=0; identical to ``np.std``).
+
+    Non-numeric fields (``k``, ``status``, ``true_k``, ``n_nodes``,
+    ``n_edges``, ``dataset_source``, ``experiment_id``, etc.) are
+    preserved from the first row in the group; ``k`` is also reported
+    as ``k_mean`` (rounded to int) and ``k_std``. ``seeds_used``
+    lists the seeds that contributed.
+    """
+
+    grouped: dict[tuple[str, str], list[dict[str, object]]] = {}
+    for row in raw_rows:
+        key = (str(row.get("dataset")), str(row.get("algorithm")))
+        grouped.setdefault(key, []).append(row)
+
+    aggregated: list[dict[str, object]] = []
+    for (dataset, algorithm), group in grouped.items():
+        out: dict[str, object] = {
+            "dataset": dataset,
+            "algorithm": algorithm,
+            "n_seeds": len(group),
+            "seeds_used": [r.get("seed") for r in group],
+        }
+        # Carry through metadata from the first row.
+        for meta in (
+            "experiment_id",
+            "true_k",
+            "dataset_source",
+            "n_nodes",
+            "n_edges",
+            "labels_path",
+        ):
+            out[meta] = group[0].get(meta)
+
+        # If every row in the group is skipped, propagate the first
+        # skip reason and leave all numeric fields as None.
+        all_skipped = all(str(r.get("status")) in {"skipped", "baseline_imported"} for r in group)
+        if all_skipped:
+            out["status"] = group[0].get("status")
+            out["skip_reason"] = group[0].get("skip_reason")
+            for f in _NUMERIC_FIELDS:
+                out[f] = None
+                out[f"{f}_mean"] = None
+                out[f"{f}_std"] = None
+            out["k"] = None
+            out["k_mean"] = None
+            out["k_std"] = None
+            aggregated.append(out)
+            continue
+
+        out["status"] = "ok"
+        out["skip_reason"] = None
+
+        for f in _NUMERIC_FIELDS:
+            vals = [r.get(f) for r in group if isinstance(r.get(f), (int, float))]
+            if vals:
+                m = float(np.mean(vals))
+                s = float(np.std(vals, ddof=0))
+                out[f] = m
+                out[f"{f}_mean"] = m
+                out[f"{f}_std"] = s
+            else:
+                out[f] = None
+                out[f"{f}_mean"] = None
+                out[f"{f}_std"] = None
+
+        k_vals = [r.get("k") for r in group if isinstance(r.get("k"), (int, float))]
+        if k_vals:
+            out["k"] = int(round(float(np.mean(k_vals))))
+            out["k_mean"] = float(np.mean(k_vals))
+            out["k_std"] = float(np.std(k_vals, ddof=0))
+        else:
+            out["k"] = None
+            out["k_mean"] = None
+            out["k_std"] = None
+
+        aggregated.append(out)
+
+    return aggregated
+
+
+def fmt_mean_std(mean: object, std: object, digits: int = 3) -> str:
+    if mean is None:
+        return "skip"
+    if not isinstance(mean, (int, float)):
+        return str(mean)
+    if std is None or not isinstance(std, (int, float)) or std < 1e-6:
+        return f"{float(mean):.{digits}f}"
+    return f"{float(mean):.{digits}f}±{float(std):.{digits}f}"
+
+
+def write_report(rows: list[dict[str, object]], seeds: list[int] | None = None) -> Path:
+    """Write JSON of per-seed rows + an aggregated mean/std markdown report.
+
+    When ``seeds`` is provided (or auto-detected from the row tags), the
+    markdown tables show ``mean ± std`` cells via :func:`aggregate_rows`.
+    The JSON sidecar always contains the raw per-seed rows.
+    """
+
     out_dir = Path("docs/experimental_reports")
     out_dir.mkdir(parents=True, exist_ok=True)
     exp_id = rows[0]["experiment_id"] if rows else "seclust_full_benchmark"
+
+    # Always save raw per-seed rows.
     json_path = out_dir / f"{exp_id}.json"
-    report_path = out_dir / f"{exp_id}.md"
     json_path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
 
-    synthetic_rows = [row for row in rows if row["dataset"] in SYNTHETIC_BASELINES]
-    real_rows = [row for row in rows if row["dataset"] in REAL_WORLD_BASELINES]
-    skipped = [row for row in rows if str(row["algorithm"]).startswith("SEClust") and row["status"] != "ok"]
-    completed = [row for row in rows if str(row["algorithm"]).startswith("SEClust") and row["status"] == "ok"]
+    if seeds is None:
+        seeds = sorted({r.get("seed") for r in rows if r.get("seed") is not None})
+    multi_seed = len(seeds) > 1
+
+    # Aggregate (always — single-seed yields std=0, which is rendered
+    # as a bare value by ``fmt_mean_std``).
+    aggregated = aggregate_rows(rows)
+    agg_path = out_dir / f"{exp_id}_aggregated.json"
+    agg_path.write_text(json.dumps(aggregated, indent=2) + "\n", encoding="utf-8")
+
+    report_path = out_dir / f"{exp_id}.md"
+
+    synthetic_rows = [row for row in aggregated if row["dataset"] in SYNTHETIC_BASELINES]
+    real_rows = [row for row in aggregated if row["dataset"] in REAL_WORLD_BASELINES]
+    skipped = [row for row in aggregated if str(row["algorithm"]).startswith("SEClust") and row["status"] != "ok"]
+    completed = [row for row in aggregated if str(row["algorithm"]).startswith("SEClust") and row["status"] == "ok"]
 
     report = f"""# SEClust Full Benchmark Against Existing Baselines
 
-**Date:** {date.today().strftime("%B %-d, %Y")}  
+**Date:** {date.today().strftime("%B %-d, %Y")}
 **Project:** glass-jax / `glass.seclust`
 
 ## 1. Abstract
-This report extends the SEClust benchmark to the datasets used in `tests/benchmark_full.py` and the existing reports:
-
-- `docs/experimental_reports/benchmark_sbm_20260506.md`
-- `docs/experimental_reports/real_world_comparison_20260507.md`
-
-Baseline values are copied from those reports. `SEClust-Auto` and `SEClust-Tree` are executed in this run. Any SEClust run with an estimated runtime above 3 minutes is skipped and reported with its estimate.
+This report benchmarks SEClust on the synthetic datasets defined in `tests/benchmark_full.py` and the real-world PyG datasets (Cora, Citeseer, Photo) loaded via `torch_geometric.datasets`. All baselines (Louvain, Leiden, Infomap, Glass-JAX variants) are executed end-to-end in this run; no values are imported from prior reports. Real-world graphs are loaded directly into a sparse `SparseGraph` adjacency without any dense `(N, N)` materialization, so Cora/Citeseer/Photo no longer hit the dense node guard.
 
 ## 2. Setup
-- Synthetic datasets are generated locally with NumPy equivalents of the benchmark definitions.
-- Real-world PyG datasets are loaded when `torch_geometric` is available. Dense real-world runs use the same 3 minute guard; Photo is skipped before dense materialization when it exceeds the dense node guard.
-- SEClust config: `mode="heuristic"`, `heuristic_starts={SECLUST_STARTS}`, `max_passes={SECLUST_MAX_PASSES}`, seed `{SECLUST_SEED}`.
-- Runtime limit: `{TIME_LIMIT_SECONDS:.0f}` seconds per dataset.
+- Synthetic datasets are generated locally with NumPy adjacencies; the SEClust path automatically converts to sparse incremental scoring.
+- Real-world PyG datasets are loaded with `SparseGraph.from_edge_index(edge_index, num_nodes)` — no dense materialization. Baselines (Louvain/Leiden/Infomap) accept the sparse adjacency through a CSR coercion path.
+- SEClust config: `heuristic_starts={SECLUST_STARTS}`, `max_passes={SECLUST_MAX_PASSES}`, seed `{SECLUST_SEED}`.
+- Runtime limit: `{TIME_LIMIT_SECONDS:.0f}` seconds per dataset; runs that the incremental estimator predicts will exceed this are skipped with the estimate recorded.
 - Logged metrics follow `docs/seclust/experiment_protocol.md`: ACC, NMI, ARI, K, modularity, structural entropy, map equation, and runtime.
 - Bold values mark the best available result per dataset and metric. K is diagnostic and is not bolded.
 
@@ -779,25 +1282,41 @@ Baseline values are copied from those reports. `SEClust-Auto` and `SEClust-Tree`
 {real_world_table(real_rows)}
 
 ## 5. Summary
-- Completed SEClust runs: `{len(completed)}`.
-- Skipped or unavailable SEClust runs: `{len(skipped)}`.
-- Larger synthetic graphs now use sparse incremental structural entropy delta scoring. Runs are skipped only if the incremental estimator exceeds the 3 minute limit.
+- Seeds executed: `{seeds}` ({"multi-seed" if multi_seed else "single seed"}).
+- Completed SEClust groups: `{len(completed)}`.
+- Skipped or unavailable SEClust groups: `{len(skipped)}`.
+- All baselines on Cora/Citeseer/Photo are executed in this run via the sparse pipeline.
+{"- Numeric cells are reported as `mean ± std` across seeds; if a row is deterministic (or a single seed was used) only the mean is shown." if multi_seed else ""}
 
 **Notes:**
-- **True K***: Denotes the ground-truth number of communities in the dataset. Parameter-free community detection algorithms (like Louvain, Leiden, and Infomap) do *not* take `K` as an input; their output `K` is dynamically determined by the objective function's mathematical peak.
-- **Skipped Real-World Datasets**: Real-world datasets with `status=skipped` either exceed the dense matrix memory limit (`N > 4000`, e.g., Photo) or fail the quadratic $O(N^2)$ time-estimate guardrail for dense PyG graphs.
+- **True K***: Ground-truth number of communities. Parameter-free community detection algorithms (Louvain, Leiden, Infomap) do not take `K` as an input.
+- **SEClust-Auto** runs `cluster_graph(mode="heuristic")` with multistart incremental local move; **SEClust-Tree** runs `hierarchical_se_clustering` with target_clusters=K; **SEClust-TargetK** runs `merge_hierarchy_levels` then `select_hierarchy_level(K)`.
 
-Raw results are saved at `{json_path}`.
+Raw per-seed results are at `{json_path}`. Aggregated mean/std rows are at `{agg_path}`.
 """
     report_path.write_text(report, encoding="utf-8")
     return report_path
 
 
 if __name__ == "__main__":
-    results = run_benchmark()
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__ or "")
+    parser.add_argument(
+        "--seeds",
+        type=str,
+        default=str(SECLUST_SEED),
+        help="Comma-separated list of seeds (default: 42).",
+    )
+    args = parser.parse_args()
+    seeds = [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
+    print(f"Running benchmark with seeds={seeds}", flush=True)
+
+    raw = run_benchmark(seeds=seeds)
+    aggregated = aggregate_rows(raw)
     print("\n--- Synthetic Table ---")
-    print(synthetic_table([row for row in results if row["dataset"] in SYNTHETIC_BASELINES]))
+    print(synthetic_table([row for row in aggregated if row["dataset"] in SYNTHETIC_BASELINES]))
     print("\n--- Real-World Table ---")
-    print(real_world_table([row for row in results if row["dataset"] in REAL_WORLD_BASELINES]))
-    path = write_report(results)
+    print(real_world_table([row for row in aggregated if row["dataset"] in REAL_WORLD_BASELINES]))
+    path = write_report(raw, seeds=seeds)
     print(f"\nBenchmark report saved to {path}")

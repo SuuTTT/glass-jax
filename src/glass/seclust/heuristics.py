@@ -9,7 +9,7 @@ import numpy as np
 
 from .entropy import canonicalize_labels, structural_entropy
 from .exact import exact_minimize_structural_entropy
-from .incremental import multistart_incremental_se_heuristic
+from .incremental import SparseGraph, multistart_incremental_se_heuristic
 
 
 @dataclass(frozen=True)
@@ -101,7 +101,7 @@ def local_move_se_clustering(
 
 
 def multistart_se_heuristic(
-    adj: np.ndarray,
+    adj,
     starts: int = 16,
     max_passes: int = 50,
     seed: int = 0,
@@ -137,7 +137,7 @@ def multistart_se_heuristic(
 
 
 def cluster_graph(
-    adj: np.ndarray,
+    adj,
     mode: Literal["auto", "exact", "heuristic"] = "auto",
     exact_max_nodes: int = 9,
     heuristic_starts: int = 24,
@@ -146,8 +146,17 @@ def cluster_graph(
 ) -> ClusteringResult:
     """High-level structural entropy clustering entry point."""
 
-    n_nodes = int(np.asarray(adj).shape[0])
+    if isinstance(adj, SparseGraph):
+        n_nodes = adj.n_nodes
+    else:
+        import scipy.sparse as sp
+        if sp.issparse(adj):
+            n_nodes = int(adj.shape[0])
+        else:
+            n_nodes = int(np.asarray(adj).shape[0])
     if mode == "exact" or (mode == "auto" and n_nodes <= exact_max_nodes):
+        if isinstance(adj, SparseGraph):
+            raise ValueError("exact mode requires a dense adjacency input")
         exact = exact_minimize_structural_entropy(adj, max_nodes=max(exact_max_nodes, n_nodes))
         return ClusteringResult(exact.entropy, exact.labels, method="exact-rgs", exact=True)
     if mode not in {"auto", "heuristic"}:

@@ -21,9 +21,15 @@ The project includes a robust, automated benchmark pipeline in `tests/benchmark_
 *   It automatically logs dynamically timestamped Markdown and JSON reports to `docs/experimental_reports/`. (Note: Dense real-world datasets like Cora are currently skipped by a built-in time/memory guardrail until native sparse inputs are supported).
 
 ## 4. What to do next (The Roadmap to Publication)
-The strategic goal is to publish SEClust in a top-tier journal/conference (NeurIPS, KDD, TKDE). The algorithmic logic is sound and highly competitive; the remaining work is purely focused on extreme scaling, vectorization, and paper writing. 
+The strategic goal is to make glass-se and SEClust into a high-performance structural entropy optimizer lib and publish  a top-tier journal/conference (NeurIPS, KDD, TKDE). The algorithmic logic is sound and highly competitive; the remaining work is purely focused on extreme scaling, vectorization, and paper writing. 
 
 *(This is mirrored in `TODO.md`)*
+**Method Writing**
+1. write a comprehensive "Design and Methodology" paper section describing the mathematical formulation of Structural Entropy, the algorithmic design of SEClust and Glass SE and the theoretical justifications for each component (e.g., why multi-level coarsening is necessary, how the connectedness refinement prevents local minima, etc.). This will be the core technical contribution of the paper.
+2.  also write the preliminary section which introduce every concept(like diffrentiate clustering) and trick from scratch, using first principles.
+
+**experiment**
+1. conduct full benchmarks, including those large graph, generate a first version of the "Results" section with tables and plots comparing SEClust against Leiden, Louvain, Infomap, and SEP baselines on all datasets.
 
 **High Priority Engineering:**
 1.  **JAX Vectorization:** The multi-level coarsening and incremental state updates are currently written in pure Python/NumPy loop structures. To crush Leiden's execution speed, the `local_move_incremental` inner loop needs to be ported into a `jax.jit` compiled kernel so that candidate evaluations can happen in parallel on GPU/TPU.

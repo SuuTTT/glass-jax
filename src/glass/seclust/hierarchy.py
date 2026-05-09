@@ -7,8 +7,8 @@ import math
 
 import numpy as np
 
-from .entropy import canonicalize_labels, structural_entropy
-from .incremental import multistart_incremental_se_heuristic
+from .entropy import canonicalize_labels, sparse_structural_entropy, structural_entropy
+from .incremental import SparseGraph, multistart_incremental_se_heuristic
 
 
 @dataclass(frozen=True)
@@ -75,21 +75,48 @@ def _term(cut: float, volume: float, parent_volume: float, graph_volume: float, 
     return float(-(max(cut, 0.0) / graph_volume) * math.log2(max(volume / parent_volume, eps)))
 
 
-def _initial_module_stats(adj: np.ndarray, base_labels: np.ndarray):
+def _initial_module_stats(adj, base_labels: np.ndarray):
+    """Per-module volume/cut/between statistics. Sparse-aware."""
+
     labels = canonicalize_labels(base_labels)
-    degrees = adj.sum(axis=1)
-    graph_volume = float(degrees.sum())
+    if isinstance(adj, SparseGraph):
+        graph = adj
+    else:
+        graph = SparseGraph.from_adjacency(adj)
+    degrees = graph.degrees
+    graph_volume = float(graph.volume)
     n_modules = int(labels.max()) + 1 if labels.size else 0
     volumes = np.zeros(n_modules, dtype=float)
     cuts = np.zeros(n_modules, dtype=float)
+    between = np.zeros((max(n_modules, 1), max(n_modules, 1)), dtype=float)
+
+    for module in range(n_modules):
+        mask = labels == module
+        volumes[module] = float(degrees[mask].sum())
+
+    internal_twice = np.zeros(n_modules, dtype=float)
+    for node in range(graph.n_nodes):
+        cid = int(labels[node])
+        for nbr, weight in zip(graph.neighbors[node], graph.weights[node]):
+            other = int(labels[int(nbr)])
+            if other == cid:
+                internal_twice[cid] += float(weight)
+            else:
+                # ``weight`` shows up in both (node, nbr) and (nbr, node) traversals
+                # so the running between is already double-counted; we keep it
+                # here and divide later.
+                between[cid, other] += float(weight)
+
+    cuts = np.maximum(volumes - internal_twice, 0.0)
+    # ``between`` was accumulated by visiting each undirected (u, v) edge twice
+    # — once at node ``u`` and once at node ``v``. Halve so that
+    # between[i, j] == between[j, i] == total cross-cluster edge weight.
+    between = between * 0.5
+
     fixed_leaf_entropy = 0.0
     for module in range(n_modules):
         mask = labels == module
-        volume = float(degrees[mask].sum())
-        internal = float(adj[np.ix_(mask, mask)].sum())
-        cut = max(volume - internal, 0.0)
-        volumes[module] = volume
-        cuts[module] = cut
+        volume = volumes[module]
         positive_degrees = degrees[mask]
         positive_degrees = positive_degrees[positive_degrees > 1e-12]
         if graph_volume > 1e-12 and volume > 1e-12 and positive_degrees.size:
@@ -97,14 +124,6 @@ def _initial_module_stats(adj: np.ndarray, base_labels: np.ndarray):
                 -np.sum((positive_degrees / graph_volume) * np.log2(positive_degrees / volume))
             )
 
-    between = np.zeros((max(n_modules, 1), max(n_modules, 1)), dtype=float)
-    rows, cols = np.where(np.triu(adj, k=1) > 0)
-    for row, col in zip(rows, cols):
-        left = int(labels[int(row)])
-        right = int(labels[int(col)])
-        if left != right:
-            between[left, right] += float(adj[int(row), int(col)])
-            between[right, left] += float(adj[int(row), int(col)])
     return labels, degrees, graph_volume, volumes, cuts, between, fixed_leaf_entropy
 
 
@@ -173,7 +192,7 @@ def coding_tree_hierarchy_levels(
         return HierarchicalLevel(
             k=int(len(active)),
             labels=labels,
-            entropy=structural_entropy(adj, labels),
+            entropy=sparse_structural_entropy(adj, labels),
             tree_entropy=tree_entropy,
         )
 
@@ -228,19 +247,22 @@ def coding_tree_hierarchy_levels(
 
 
 def merge_hierarchy_levels(
-    adj: np.ndarray,
+    adj,
     base_labels: np.ndarray,
     min_clusters: int = 1,
 ) -> tuple[HierarchicalLevel, ...]:
     """Build a merge hierarchy by least flat-SE increase between modules."""
 
-    from .incremental import SparseGraph, IncrementalSEState
-    
+    from .incremental import IncrementalSEState
+
     labels = canonicalize_labels(base_labels)
     if min_clusters < 1:
         raise ValueError("min_clusters must be >= 1")
-        
-    graph = SparseGraph.from_adjacency(adj)
+
+    if isinstance(adj, SparseGraph):
+        graph = adj
+    else:
+        graph = SparseGraph.from_adjacency(adj)
     state = IncrementalSEState(graph, labels)
     
     levels = [HierarchicalLevel(k=int(len(np.unique(state.labels))), labels=state.labels.copy(), entropy=state.entropy, tree_entropy=state.entropy)]
@@ -333,7 +355,7 @@ def select_hierarchy_level(
 
 
 def hierarchical_se_clustering(
-    adj: np.ndarray,
+    adj,
     target_clusters: int | None = None,
     base_labels: np.ndarray | None = None,
     starts: int = 6,
@@ -344,9 +366,13 @@ def hierarchical_se_clustering(
 
     if target_clusters is not None and target_clusters < 1:
         raise ValueError("target_clusters must be >= 1")
+    if isinstance(adj, SparseGraph):
+        graph = adj
+    else:
+        graph = SparseGraph.from_adjacency(adj)
     if base_labels is None:
         base_labels, _ = multistart_incremental_se_heuristic(
-            adj,
+            graph,
             starts=starts,
             max_passes=max_passes,
             seed=seed,
@@ -355,16 +381,12 @@ def hierarchical_se_clustering(
         base_labels = canonicalize_labels(base_labels)
 
     from .coding_tree import build_coding_tree_from_modules, extract_flat_labels
-    root, nodes = build_coding_tree_from_modules(adj, base_labels, target_k=2)
-    
-    # If the user requested a specific number of clusters, we need to extract that level.
-    # But since we built a 2-level tree, the children of the root are the communities.
-    # To support target_clusters, we can just use the base_labels if they want fine-grained,
-    # or build the tree without compressing, and then extract the level with K clusters.
-    # For now, let's return the optimal 2D SE partition found by the coding tree.
-    labels = extract_flat_labels(nodes, root, adj.shape[0], base_labels)
+    root, nodes = build_coding_tree_from_modules(graph, base_labels, target_k=2)
+
+    n_nodes = graph.n_nodes
+    labels = extract_flat_labels(nodes, root, n_nodes, base_labels)
     k = int(labels.max()) + 1
-    entropy = structural_entropy(adj, labels)
+    entropy = sparse_structural_entropy(graph, labels)
     
     selected = HierarchicalLevel(k=k, labels=labels.copy(), entropy=entropy, tree_entropy=entropy)
 

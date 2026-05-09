@@ -24,39 +24,36 @@ class SparseGraph:
     n_edges: int
 
     @classmethod
-    def from_adjacency(cls, adj, node_degree_log_degree=None) -> "SparseGraph":
+    def from_csr(cls, matrix, node_degree_log_degree=None) -> "SparseGraph":
+        """Build from an already-symmetric CSR matrix without densification."""
+
         import scipy.sparse as sp
-        if sp.issparse(adj):
-            matrix = adj.tocsr()
-            matrix = 0.5 * (matrix + matrix.T)
-        else:
-            matrix = np.asarray(adj, dtype=float)
-            matrix = 0.5 * (matrix + matrix.T)
-            matrix = sp.csr_matrix(matrix)
-            
+        if not sp.isspmatrix_csr(matrix):
+            matrix = matrix.tocsr()
         degrees = np.asarray(matrix.sum(axis=1)).flatten()
+        matrix = matrix.copy()
         matrix.setdiag(0.0)
         matrix.eliminate_zeros()
         node_cuts = np.asarray(matrix.sum(axis=1)).flatten()
-        
+
         if node_degree_log_degree is None:
             node_degree_log_degree = np.zeros_like(degrees)
             positive = degrees > 1e-12
             node_degree_log_degree[positive] = degrees[positive] * np.log2(degrees[positive])
-        
+
         neighbors = []
         weights = []
         edge_count = 0
         for node in range(matrix.shape[0]):
             start = matrix.indptr[node]
-            end = matrix.indptr[node+1]
+            end = matrix.indptr[node + 1]
             idx = matrix.indices[start:end]
             vals = matrix.data[start:end]
-            
+
             neighbors.append(idx.astype(np.int32, copy=False))
             weights.append(vals.astype(float, copy=False))
             edge_count += int(np.sum(idx > node))
-            
+
         return cls(
             neighbors=tuple(neighbors),
             weights=tuple(weights),
@@ -67,6 +64,58 @@ class SparseGraph:
             n_nodes=int(matrix.shape[0]),
             n_edges=edge_count,
         )
+
+    @classmethod
+    def from_adjacency(cls, adj, node_degree_log_degree=None) -> "SparseGraph":
+        import scipy.sparse as sp
+        if isinstance(adj, SparseGraph):
+            return adj
+        if sp.issparse(adj):
+            matrix = adj.tocsr()
+            matrix = 0.5 * (matrix + matrix.T)
+        else:
+            matrix = np.asarray(adj, dtype=float)
+            matrix = 0.5 * (matrix + matrix.T)
+            matrix = sp.csr_matrix(matrix)
+
+        return cls.from_csr(matrix.tocsr(), node_degree_log_degree=node_degree_log_degree)
+
+    @classmethod
+    def from_edge_index(
+        cls,
+        edge_index,
+        num_nodes: int,
+        weights=None,
+        node_degree_log_degree=None,
+    ) -> "SparseGraph":
+        """Build directly from a PyG-style ``edge_index`` (shape ``(2, E)``).
+
+        The pair list is symmetrized internally (so ``(u, v)`` may appear once
+        or twice in the input). Self-loops are dropped from cut accounting but
+        retained in degrees, matching ``from_adjacency``.
+        """
+
+        import scipy.sparse as sp
+        edge_index = np.asarray(edge_index, dtype=np.int64)
+        if edge_index.ndim != 2 or edge_index.shape[0] != 2:
+            raise ValueError("edge_index must have shape (2, E)")
+        src = edge_index[0]
+        dst = edge_index[1]
+        if weights is None:
+            data = np.ones(src.shape[0], dtype=float)
+        else:
+            data = np.asarray(weights, dtype=float).reshape(-1)
+            if data.shape[0] != src.shape[0]:
+                raise ValueError("weights must align with edge_index columns")
+        if np.any(data < 0):
+            raise ValueError("structural entropy expects non-negative edge weights")
+        # Symmetrize by stacking both directions; duplicate entries summed by COO->CSR.
+        rows = np.concatenate([src, dst])
+        cols = np.concatenate([dst, src])
+        vals = np.concatenate([data, data]) * 0.5
+        matrix = sp.coo_matrix((vals, (rows, cols)), shape=(num_nodes, num_nodes)).tocsr()
+        matrix.sum_duplicates()
+        return cls.from_csr(matrix, node_degree_log_degree=node_degree_log_degree)
 
 
 class IncrementalSEState:
@@ -295,7 +344,10 @@ def local_move_incremental(
 ) -> tuple[np.ndarray, float]:
     """Run sparse incremental node-move SE local search."""
 
-    graph = SparseGraph.from_adjacency(adj, node_degree_log_degree)
+    if isinstance(adj, SparseGraph):
+        graph = adj
+    else:
+        graph = SparseGraph.from_adjacency(adj, node_degree_log_degree)
     state = IncrementalSEState(graph, init_labels)
     rng = np.random.default_rng(seed)
 
@@ -325,6 +377,35 @@ def local_move_incremental(
 
 import scipy.sparse as sp
 
+def _to_sparse_adj(adj):
+    """Return a scipy CSR adjacency without dense materialization where possible."""
+
+    if isinstance(adj, SparseGraph):
+        n = adj.n_nodes
+        rows = []
+        cols = []
+        vals = []
+        for node in range(n):
+            nbrs = adj.neighbors[node]
+            ws = adj.weights[node]
+            if nbrs.size:
+                rows.append(np.full(nbrs.size, node, dtype=np.int64))
+                cols.append(nbrs.astype(np.int64))
+                vals.append(ws.astype(float))
+        if rows:
+            row = np.concatenate(rows)
+            col = np.concatenate(cols)
+            data = np.concatenate(vals)
+        else:
+            row = np.zeros(0, dtype=np.int64)
+            col = np.zeros(0, dtype=np.int64)
+            data = np.zeros(0, dtype=float)
+        return sp.coo_matrix((data, (row, col)), shape=(n, n)).tocsr()
+    if sp.issparse(adj):
+        return adj.tocsr()
+    return sp.csr_matrix(np.asarray(adj, dtype=float))
+
+
 def multi_level_local_move(
     adj,
     init_labels: np.ndarray | None = None,
@@ -333,13 +414,18 @@ def multi_level_local_move(
     return_hierarchy: bool = False,
 ):
     rng = np.random.default_rng(seed)
-    
-    current_adj = adj
+
+    if isinstance(adj, SparseGraph):
+        base_graph = adj
+    else:
+        base_graph = SparseGraph.from_adjacency(adj)
+
+    current_adj = _to_sparse_adj(base_graph)
     current_labels = init_labels
     current_dlogd = None
-    
+
     projections = []
-    
+
     while True:
         labels, _ = local_move_incremental(
             current_adj,
@@ -349,12 +435,12 @@ def multi_level_local_move(
             seed=int(rng.integers(1<<30)),
             allow_new_cluster=True,
         )
-        
+
         k = int(labels.max()) + 1
         if k == current_adj.shape[0] or k == 1:
             projections.append(labels)
             break
-            
+
         import scipy.sparse.csgraph as csgraph
         new_labels = np.zeros_like(labels)
         next_label = 0
@@ -365,41 +451,45 @@ def multi_level_local_move(
             n_comp, comp_labels = csgraph.connected_components(sub_adj, directed=False)
             new_labels[mask] = comp_labels + next_label
             next_label += n_comp
-            
+
         labels = canonicalize_labels(new_labels)
         k = int(labels.max()) + 1
-        
+
         projections.append(labels)
-        
+
         row = np.arange(len(labels))
         col = labels
         data = np.ones(len(labels), dtype=current_adj.dtype)
         S = sp.csr_matrix((data, (row, col)), shape=(len(labels), k))
-        A_sparse = sp.csr_matrix(current_adj)
-        current_adj = S.T @ A_sparse @ S
-        
+        current_adj = S.T @ current_adj @ S
+
         current_labels = np.arange(k, dtype=np.int32)
-        
+
     final_labels = projections[-1]
     for i in range(len(projections) - 2, -1, -1):
         final_labels = final_labels[projections[i]]
-        
+
     final_labels = canonicalize_labels(final_labels)
-    entropy = structural_entropy(adj, final_labels)
+    final_state = IncrementalSEState(base_graph, final_labels)
+    entropy = float(final_state.entropy)
     if return_hierarchy:
         return final_labels, entropy, projections
     return final_labels, entropy
 
 
 def multistart_incremental_se_heuristic(
-    adj: np.ndarray,
+    adj,
     starts: int = 8,
     max_passes: int = 20,
     seed: int = 0,
 ) -> tuple[np.ndarray, float]:
     """Run dependency-light scalable SE local search from several starts."""
 
-    n_nodes = int(np.asarray(adj).shape[0])
+    if isinstance(adj, SparseGraph):
+        graph = adj
+    else:
+        graph = SparseGraph.from_adjacency(adj)
+    n_nodes = graph.n_nodes
     rng = np.random.default_rng(seed)
     seeds = [
         np.arange(n_nodes, dtype=np.int32),
@@ -413,7 +503,7 @@ def multistart_incremental_se_heuristic(
     best_entropy = float("inf")
     for i, labels in enumerate(seeds):
         candidate_labels, entropy = multi_level_local_move(
-            adj,
+            graph,
             init_labels=labels,
             max_passes=max_passes,
             seed=seed + i,

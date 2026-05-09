@@ -134,3 +134,20 @@ def structural_entropy_many(adj: np.ndarray, labelings: Iterable[Iterable[int]])
         PartitionScore(entropy=structural_entropy(adj, labels), labels=canonicalize_labels(labels))
         for labels in labelings
     ]
+
+
+def sparse_structural_entropy(graph_or_adj, labels: Iterable[int]) -> float:
+    """Compute 2D structural entropy without dense materialization.
+
+    Accepts a ``SparseGraph``, a scipy sparse matrix, or a dense ndarray.
+    For non-dense inputs the cost is ``O(n + m + k)``.
+    """
+
+    from .incremental import IncrementalSEState, SparseGraph
+
+    if isinstance(graph_or_adj, SparseGraph):
+        graph = graph_or_adj
+    else:
+        graph = SparseGraph.from_adjacency(graph_or_adj)
+    state = IncrementalSEState(graph, np.asarray(list(labels), dtype=np.int32))
+    return float(state.entropy)

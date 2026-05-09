@@ -15,6 +15,7 @@ from .entropy import (
     canonicalize_labels,
     labels_to_partition,
     partition_to_labels,
+    sparse_structural_entropy,
     structural_entropy,
 )
 from .exact import ExactSearchResult, exact_minimize_structural_entropy, iter_restricted_growth_strings
@@ -40,6 +41,8 @@ from .incremental import (
     local_move_incremental,
     multistart_incremental_se_heuristic,
 )
+from .metrics import dasgupta_cost, dendrogram_purity, hierarchy_to_lca_size
+from .multilevel import multilevel_se_clustering
 from .rl import StructuralEntropyMoveEnv, cem_node_move_search
 
 __all__ = [
@@ -60,6 +63,9 @@ __all__ = [
     "cluster_graph",
     "coding_tree_hierarchy_levels",
     "compare_on_dataset",
+    "dasgupta_cost",
+    "dendrogram_purity",
+    "hierarchy_to_lca_size",
     "exact_minimize_structural_entropy",
     "iter_restricted_growth_strings",
     "hierarchical_se_clustering",
@@ -68,6 +74,7 @@ __all__ = [
     "labels_to_partition",
     "local_move_se_clustering",
     "local_move_incremental",
+    "multilevel_se_clustering",
     "multistart_se_heuristic",
     "multistart_incremental_se_heuristic",
     "merge_hierarchy_levels",
@@ -76,6 +83,7 @@ __all__ = [
     "run_official_sep_coding_tree",
     "seeded_sbm",
     "select_hierarchy_level",
+    "sparse_structural_entropy",
     "structural_entropy",
     "weighted_bridge_graph",
 ]

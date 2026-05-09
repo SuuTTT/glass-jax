@@ -73,11 +73,14 @@ def compress_node(nodes_dict, node_id, parent_id):
             if parent_id is None:
                 break
 
-def build_coding_tree_from_modules(adj: np.ndarray, base_labels: np.ndarray, target_k: int | None = None):
+def build_coding_tree_from_modules(adj, base_labels: np.ndarray, target_k: int | None = None):
     base_labels = canonicalize_labels(base_labels)
     n_modules = int(base_labels.max()) + 1 if base_labels.size else 0
-    
-    graph = SparseGraph.from_adjacency(adj)
+
+    if isinstance(adj, SparseGraph):
+        graph = adj
+    else:
+        graph = SparseGraph.from_adjacency(adj)
     
     module_vol = np.zeros(n_modules, dtype=float)
     module_cut = np.zeros(n_modules, dtype=float)
