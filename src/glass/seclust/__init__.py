@@ -41,6 +41,13 @@ from .incremental import (
     local_move_incremental,
     multistart_incremental_se_heuristic,
 )
+from .lookahead import (
+    merge_to_target_with_lookahead,
+    merge_to_target_with_mpc,
+    merge_to_target_with_td_bootstrap,
+    merge_to_target_with_td_lambda,
+    seclust_target_k_lookahead,
+)
 from .metrics import dasgupta_cost, dendrogram_purity, hierarchy_to_lca_size
 from .multilevel import multilevel_se_clustering
 from .rl import StructuralEntropyMoveEnv, cem_node_move_search
@@ -74,7 +81,12 @@ __all__ = [
     "labels_to_partition",
     "local_move_se_clustering",
     "local_move_incremental",
+    "merge_to_target_with_lookahead",
+    "merge_to_target_with_mpc",
+    "merge_to_target_with_td_bootstrap",
+    "merge_to_target_with_td_lambda",
     "multilevel_se_clustering",
+    "seclust_target_k_lookahead",
     "multistart_se_heuristic",
     "multistart_incremental_se_heuristic",
     "merge_hierarchy_levels",
