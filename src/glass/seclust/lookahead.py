@@ -345,6 +345,86 @@ def _best_first_merge_via_beam(state: _LookaheadState, depth: int, width: int) -
 
 # ---------- TD bootstrap: rollout-policy lookahead ----------
 
+def merge_to_target_with_adaptive_td(
+    adj,
+    base_labels: np.ndarray,
+    target_clusters: int,
+    max_w: int = 8,
+    margin_tau: float = 0.10,
+) -> tuple[np.ndarray, float]:
+    r"""TD bootstrap with **adaptive width** by score-margin confidence.
+
+    Idea **A** in `_ideas_to_try.md` / item #5 in idealist. Addresses
+    the td(w=8) regression on hier_sbm in idea 001: wider $w$ can
+    *hurt* because the greedy-rollout value function is noisy, so
+    scoring more candidates with a noisier estimator increases
+    variance.
+
+    The adaptive rule at each merge step:
+
+    1. Score the top-``max_w`` candidates by immediate $\Delta H_2$
+       and run a full greedy rollout to ``target_clusters`` from each.
+    2. Sort by ``immediate + bootstrap`` total. Compute the *margin*
+       between the best and second-best totals, normalised by the
+       overall score range:
+
+           margin = (s[1] - s[0]) / max(s[-1] - s[0], 1e-12)
+
+       This is in $[0, 1]$: large means the winner is clearly
+       separated; small means the top candidates are within noise of
+       each other.
+    3. If ``margin >= margin_tau``: trust TD bootstrap; commit
+       ``s[0]``'s first merge.
+    4. Else: fall back to the immediate-delta winner (pure greedy
+       choice). We trust greedy when bootstrap can't discriminate.
+
+    With ``margin_tau = 0`` we recover full TD bootstrap (always trust
+    bootstrap); with ``margin_tau = 1`` we recover pure greedy.
+
+    The point: **adaptive_td matches td(w=4) on hier_sbm and avoids
+    td(w=8)'s regression** without the user having to pick $w$ by hand.
+    """
+
+    if target_clusters < 1 or max_w < 1:
+        raise ValueError("target_clusters/max_w must be >= 1")
+    if not (0.0 <= margin_tau <= 1.0):
+        raise ValueError("margin_tau must be in [0, 1]")
+
+    state, canonical = _initial_state(adj, base_labels)
+    while len(state.active) > target_clusters:
+        immediate = _top_w_choices(state, max_w)
+        if not immediate:
+            break
+
+        scored: list[tuple[float, int, int, float]] = []
+        for (i, j, d) in immediate:
+            cloned = state.clone()
+            cloned.apply_merge(i, j)
+            total = d + _greedy_rollout_cost(cloned, target_clusters)
+            scored.append((total, i, j, d))
+        scored.sort(key=lambda t: t[0])
+
+        if len(scored) < 2:
+            best_pair = (scored[0][1], scored[0][2])
+        else:
+            score_min = scored[0][0]
+            score_max = scored[-1][0]
+            score_range = max(score_max - score_min, 1e-12)
+            margin = (scored[1][0] - scored[0][0]) / score_range
+            if margin >= margin_tau:
+                # Confident: take the bootstrap winner.
+                best_pair = (scored[0][1], scored[0][2])
+            else:
+                # Noisy: fall back to the smallest *immediate* delta
+                # (the greedy choice).
+                greedy_best = min(scored, key=lambda t: t[3])
+                best_pair = (greedy_best[1], greedy_best[2])
+
+        state.apply_merge(*best_pair)
+
+    return _decode(state, canonical, adj)
+
+
 def merge_to_target_with_hybrid_objective(
     adj,
     base_labels: np.ndarray,

@@ -43,6 +43,7 @@ from .incremental import (
     multistart_incremental_se_heuristic,
 )
 from .lookahead import (
+    merge_to_target_with_adaptive_td,
     merge_to_target_with_hybrid_objective,
     merge_to_target_with_lookahead,
     merge_to_target_with_mpc,
@@ -84,6 +85,7 @@ __all__ = [
     "labels_to_partition",
     "local_move_se_clustering",
     "local_move_incremental",
+    "merge_to_target_with_adaptive_td",
     "merge_to_target_with_hybrid_objective",
     "merge_to_target_with_lookahead",
     "merge_to_target_with_mpc",
