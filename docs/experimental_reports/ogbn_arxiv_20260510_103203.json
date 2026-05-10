@@ -1,0 +1,45 @@
+{
+  "dataset": "ogbn-arxiv",
+  "n_nodes": 169343,
+  "n_edges_directed": 1166243,
+  "K_gt": 40,
+  "seed": 42,
+  "results": [
+    {
+      "method": "Louvain",
+      "K": 149,
+      "ACC": 0.346610134460828,
+      "NMI": 0.3957465575682236,
+      "ARI": 0.23607859750215818,
+      "time_s": 93.47925281524658,
+      "structural_entropy": null
+    },
+    {
+      "method": "Leiden",
+      "K": 167,
+      "ACC": 0.3739806192166195,
+      "NMI": 0.41251334326430433,
+      "ARI": 0.2477109056639181,
+      "time_s": 16.82808208465576,
+      "structural_entropy": null
+    },
+    {
+      "method": "SEClust-Auto",
+      "K": 13066,
+      "ACC": 0.05624088388654978,
+      "NMI": 0.3954736820324285,
+      "ARI": 0.019741259788685118,
+      "time_s": 1263.9163179397583,
+      "structural_entropy": 11.019368919920446
+    },
+    {
+      "method": "SEClust-ConstrainedK",
+      "K": 40,
+      "ACC": 0.11382224243104232,
+      "NMI": 0.1184276926132834,
+      "ARI": 0.04055624875953233,
+      "time_s": 266.34783720970154,
+      "structural_entropy": 12.746643187375005
+    }
+  ]
+}
