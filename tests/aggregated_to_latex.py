@@ -27,12 +27,12 @@ ALGORITHM_ORDER_SYNTHETIC = [
     "Louvain", "Leiden", "Infomap",
     "Glass-Mod (JAX)", "Glass-Map (JAX)",
     "HCSE",
-    "SEClust-Auto", "SEClust-Tree", "SEClust-TargetK", "SEClust-MultiLevel",
+    "SEClust-Auto", "SEClust-Tree", "SEClust-TargetK", "SEClust-MultiLevel", "SEClust-ConstrainedK",
 ]
 ALGORITHM_ORDER_REAL_WORLD = [
     "Louvain", "Leiden", "Infomap",
     "HCSE", "LSEnet", "Glass-SE GNN",
-    "SEClust-Auto", "SEClust-Tree", "SEClust-TargetK", "SEClust-MultiLevel",
+    "SEClust-Auto", "SEClust-Tree", "SEClust-TargetK", "SEClust-MultiLevel", "SEClust-ConstrainedK",
 ]
 
 DATASET_LABEL_TEX = {
