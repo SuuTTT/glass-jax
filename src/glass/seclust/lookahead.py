@@ -108,6 +108,39 @@ class _LookaheadState:
         after = _se_cluster_term(new_v, new_c, new_s, self.V)
         return after - before
 
+    def merge_delta_modularity(self, i: int, j: int) -> float:
+        """Return $-\\Delta Q$ for merging $i$ and $j$ (smaller = better merge).
+
+        Standard Louvain modularity gain on a merge:
+        $\\Delta Q = \\frac{w_{ij}}{V} - \\frac{\\mathrm{vol}_i\\,\\mathrm{vol}_j}{V^2}$
+        where $V$ is the total graph volume ($=2m$). To stay consistent
+        with ``merge_delta``'s sign convention (lower is a better merge,
+        like an SE-decrease), we return $-\\Delta Q$. The caller picks
+        the pair with smallest value.
+        """
+
+        v_i, v_j = float(self.volumes[i]), float(self.volumes[j])
+        w = float(self.between[i, j])
+        if self.V <= 1e-12:
+            return 0.0
+        delta_Q = (w / self.V) - (v_i * v_j) / (self.V * self.V)
+        return -float(delta_Q)
+
+    def merge_delta_hybrid(self, i: int, j: int, alpha: float) -> float:
+        """Convex combination of SE and (negated) modularity merge deltas.
+
+        $\\text{score} = \\alpha \\Delta H_2 + (1 - \\alpha)(-\\Delta Q)$.
+        $\\alpha = 1$ recovers pure SE-merge; $\\alpha = 0$ recovers
+        pure modularity-merge. Both deltas are sign-aligned (smaller is
+        better) so the convex combination is well-defined.
+        """
+
+        if alpha >= 1.0 - 1e-12:
+            return self.merge_delta(i, j)
+        if alpha <= 1e-12:
+            return self.merge_delta_modularity(i, j)
+        return alpha * self.merge_delta(i, j) + (1.0 - alpha) * self.merge_delta_modularity(i, j)
+
     def apply_merge(self, i: int, j: int) -> None:
         v_i, v_j = float(self.volumes[i]), float(self.volumes[j])
         c_i, c_j = float(self.cuts[i]), float(self.cuts[j])
@@ -180,8 +213,15 @@ def _initial_state(adj, base_labels: np.ndarray) -> tuple[_LookaheadState, np.nd
 
 # ---------- step primitives ----------
 
-def _greedy_choice(state: _LookaheadState) -> tuple[int, int, float] | None:
-    """Pick the immediate min-delta pair. None if no candidates."""
+def _greedy_choice(
+    state: _LookaheadState,
+    alpha: float = 1.0,
+) -> tuple[int, int, float] | None:
+    """Pick the immediate min-delta pair under the SE/modularity hybrid.
+
+    ``alpha=1.0`` (default) is pure SE; ``alpha=0.0`` is pure
+    modularity; intermediate values blend.
+    """
 
     candidates = state.candidate_pairs() or state.all_active_pairs()
     if not candidates:
@@ -189,32 +229,43 @@ def _greedy_choice(state: _LookaheadState) -> tuple[int, int, float] | None:
     best = None
     best_delta = float("inf")
     for (i, j) in candidates:
-        d = state.merge_delta(i, j)
+        d = state.merge_delta_hybrid(i, j, alpha)
         if d < best_delta - 1e-12:
             best_delta = d
             best = (i, j, d)
     return best
 
 
-def _top_w_choices(state: _LookaheadState, width: int) -> list[tuple[int, int, float]]:
+def _top_w_choices(
+    state: _LookaheadState,
+    width: int,
+    alpha: float = 1.0,
+) -> list[tuple[int, int, float]]:
     candidates = state.candidate_pairs() or state.all_active_pairs()
     if not candidates:
         return []
-    scored = [(state.merge_delta(i, j), i, j) for (i, j) in candidates]
+    scored = [(state.merge_delta_hybrid(i, j, alpha), i, j) for (i, j) in candidates]
     scored.sort()
     return [(i, j, d) for (d, i, j) in scored[:width]]
 
 
-def _greedy_rollout_cost(state: _LookaheadState, target_K: int) -> float:
-    """Pure-greedy rollout from ``state`` to ``target_K``; return cumulative ΔH_2.
+def _greedy_rollout_cost(
+    state: _LookaheadState,
+    target_K: int,
+    alpha: float = 1.0,
+) -> float:
+    """Pure-greedy rollout from ``state`` to ``target_K``.
 
-    This is the **leaf value function** for TD bootstrap: an O((K-T)·E_M)
-    estimate of the cost-to-go under the greedy base policy.
+    Uses the SE/modularity hybrid objective at each step. Returns
+    cumulative score under the same hybrid (so the bootstrap
+    estimate is in the same units as the immediate scores). Pass
+    ``alpha=1.0`` for pure SE (the original behaviour),
+    ``alpha=0.0`` for pure modularity, or anywhere in between.
     """
 
     cum = 0.0
     while len(state.active) > target_K:
-        choice = _greedy_choice(state)
+        choice = _greedy_choice(state, alpha=alpha)
         if choice is None:
             break
         i, j, d = choice
@@ -293,6 +344,53 @@ def _best_first_merge_via_beam(state: _LookaheadState, depth: int, width: int) -
 
 
 # ---------- TD bootstrap: rollout-policy lookahead ----------
+
+def merge_to_target_with_hybrid_objective(
+    adj,
+    base_labels: np.ndarray,
+    target_clusters: int,
+    top_w: int = 8,
+    alpha: float = 0.5,
+) -> tuple[np.ndarray, float]:
+    """TD bootstrap with an SE / modularity hybrid merge objective.
+
+    Idea **§2.1''** in NEXT_STEPS / item #4 in idealist. At each step
+    score candidate merges by
+
+        $$\\text{score} = \\alpha \\Delta H_2 + (1-\\alpha)(-\\Delta Q),$$
+
+    pick top-$w$ by score, run a hybrid-greedy rollout to
+    ``target_clusters``, and commit the candidate with smallest
+    immediate $+$ bootstrap. Final partition is scored on 2D SE for
+    paper-comparable numbers.
+
+    ``alpha=1.0`` recovers pure-SE TD bootstrap; ``alpha=0.0`` is
+    pure-modularity merge; ``alpha=0.5`` is a balanced blend.
+    """
+
+    if not (0.0 <= alpha <= 1.0):
+        raise ValueError("alpha must be in [0, 1]")
+    if target_clusters < 1 or top_w < 1:
+        raise ValueError("target_clusters/top_w must be >= 1")
+
+    state, canonical = _initial_state(adj, base_labels)
+    while len(state.active) > target_clusters:
+        candidates = _top_w_choices(state, top_w, alpha=alpha)
+        if not candidates:
+            break
+        best_pair, best_total = None, float("inf")
+        for (i, j, d) in candidates:
+            cloned = state.clone()
+            cloned.apply_merge(i, j)
+            total = d + _greedy_rollout_cost(cloned, target_clusters, alpha=alpha)
+            if total < best_total - 1e-12:
+                best_total = total
+                best_pair = (i, j)
+        if best_pair is None:
+            break
+        state.apply_merge(*best_pair)
+    return _decode(state, canonical, adj)
+
 
 def merge_to_target_with_td_bootstrap(
     adj,
