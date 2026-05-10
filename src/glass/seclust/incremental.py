@@ -246,6 +246,45 @@ class IncrementalSEState:
         )
         return float(source_after + target_after - source_before - target_before)
 
+    def move_delta_modularity(self, node: int, target: int) -> float:
+        """Return $-\\Delta Q$ for moving ``node`` from its current cluster to ``target``.
+
+        Standard Louvain modularity-gain formula. Sign-aligned with
+        :meth:`move_delta` so smaller is better (a more positive
+        $\\Delta Q$ produces a more negative output).
+        """
+
+        source = int(self.labels[node])
+        target = int(target)
+        if source == target:
+            return 0.0
+        V = float(self.graph.volume)
+        if V <= self.eps:
+            return 0.0
+        d_v = float(self.graph.degrees[node])
+        w_to_source = self.edge_weight_to_cluster(node, source)
+        w_to_target = self.edge_weight_to_cluster(node, target) if self.active[target] else 0.0
+        vol_source = float(self.volume[source])
+        vol_target = float(self.volume[target]) if self.active[target] else 0.0
+        delta_Q = (2.0 * (w_to_target - w_to_source)) / V \
+                  + (2.0 * d_v * (vol_source - vol_target - d_v)) / (V * V)
+        return -float(delta_Q)
+
+    def move_delta_hybrid(self, node: int, target: int, alpha: float) -> float:
+        """Convex combination of SE and (negated) modularity move deltas.
+
+        $\\text{score} = \\alpha\\,\\Delta H_2 + (1 - \\alpha)(-\\Delta Q)$.
+        $\\alpha = 1$ recovers pure SE; $\\alpha = 0$ recovers pure
+        modularity-maximising local move.
+        """
+
+        if alpha >= 1.0 - 1e-12:
+            return self.move_delta(node, target)
+        if alpha <= 1e-12:
+            return self.move_delta_modularity(node, target)
+        return alpha * self.move_delta(node, target) \
+             + (1.0 - alpha) * self.move_delta_modularity(node, target)
+
     def move_delta_batch(self, node: int, candidates: np.ndarray) -> np.ndarray:
         """Vectorised SE deltas for moving ``node`` to each cluster in ``candidates``.
 
@@ -324,6 +363,51 @@ class IncrementalSEState:
         same_as_source = candidates == source
         deltas = np.where(same_as_source, 0.0, deltas)
         return deltas.astype(float)
+
+    def move_delta_batch_modularity(self, node: int, candidates: np.ndarray) -> np.ndarray:
+        """Vectorised $-\\Delta Q$ for moving ``node`` to each of ``candidates``."""
+
+        candidates = np.asarray(candidates, dtype=np.int64)
+        if candidates.size == 0:
+            return np.zeros(0, dtype=float)
+        source = int(self.labels[node])
+        V = float(self.graph.volume)
+        if V <= self.eps:
+            return np.zeros(candidates.size, dtype=float)
+        d_v = float(self.graph.degrees[node])
+
+        nbrs = np.asarray(self.graph.neighbors[node], dtype=np.int64)
+        weights = np.asarray(self.graph.weights[node], dtype=float)
+        if nbrs.size:
+            nbr_clusters = self.labels[nbrs]
+            matches = nbr_clusters[None, :] == candidates[:, None]
+            w_to_cand = (matches.astype(float) * weights[None, :]).sum(axis=1)
+            w_source = float(weights[nbr_clusters == source].sum())
+        else:
+            w_to_cand = np.zeros(candidates.size, dtype=float)
+            w_source = 0.0
+
+        vol_source = float(self.volume[source])
+        cand_active = self.active[candidates]
+        vol_target = np.where(cand_active, self.volume[candidates], 0.0)
+        # Use 0 weight to inactive targets (no edges into empty clusters).
+        w_to_active = np.where(cand_active, w_to_cand, 0.0)
+        delta_Q = (2.0 * (w_to_active - w_source)) / V \
+                  + (2.0 * d_v * (vol_source - vol_target - d_v)) / (V * V)
+        deltas = -delta_Q
+        same_as_source = candidates == source
+        deltas = np.where(same_as_source, 0.0, deltas)
+        return deltas.astype(float)
+
+    def move_delta_batch_hybrid(self, node: int, candidates: np.ndarray, alpha: float) -> np.ndarray:
+        """Vectorised hybrid: $\\alpha\\,\\Delta H_2 + (1 - \\alpha)(-\\Delta Q)$."""
+
+        if alpha >= 1.0 - 1e-12:
+            return self.move_delta_batch(node, candidates)
+        if alpha <= 1e-12:
+            return self.move_delta_batch_modularity(node, candidates)
+        return alpha * self.move_delta_batch(node, candidates) \
+             + (1.0 - alpha) * self.move_delta_batch_modularity(node, candidates)
 
     def apply_move(self, node: int, target: int) -> float:
         delta = self.move_delta(node, target)
@@ -420,8 +504,17 @@ def local_move_incremental(
     seed: int = 0,
     allow_new_cluster: bool = True,
     node_degree_log_degree=None,
+    alpha: float = 1.0,
 ) -> tuple[np.ndarray, float]:
-    """Run sparse incremental node-move SE local search."""
+    """Run sparse incremental node-move SE local search.
+
+    ``alpha`` (default 1.0) selects the move objective:
+    ``alpha = 1.0`` is pure 2D structural entropy (the original
+    behaviour). ``alpha = 0.0`` is pure modularity-maximising local
+    move. Intermediate values use a convex blend
+    $\\alpha \\Delta H_2 + (1 - \\alpha)(-\\Delta Q)$. Idea **D** /
+    item #7 in the SEClust paper's idealist.
+    """
 
     if isinstance(adj, SparseGraph):
         graph = adj
@@ -430,22 +523,26 @@ def local_move_incremental(
     state = IncrementalSEState(graph, init_labels)
     rng = np.random.default_rng(seed)
 
-    # Try the numba-jitted kernel; fall back to numpy-batched if numba
-    # unavailable or compilation fails.
-    try:
-        from .numba_kernel import numba_move_delta_batch
-        # Warm up the kernel so the first user-visible call doesn't
-        # include compile time.
-        if graph.n_nodes:
-            warm_cands = np.asarray(
-                state.candidate_clusters(0, allow_new_cluster=allow_new_cluster),
-                dtype=np.int64,
-            )
-            if warm_cands.size:
-                numba_move_delta_batch(state, 0, warm_cands)
-        delta_fn = numba_move_delta_batch
-    except Exception:
-        delta_fn = lambda s, n, c: s.move_delta_batch(n, c)
+    pure_se = alpha >= 1.0 - 1e-12
+
+    # Try the numba-jitted kernel only for the pure-SE case; fall back
+    # to the numpy-batched hybrid (which handles arbitrary alpha) for
+    # the hybrid path.
+    if pure_se:
+        try:
+            from .numba_kernel import numba_move_delta_batch
+            if graph.n_nodes:
+                warm_cands = np.asarray(
+                    state.candidate_clusters(0, allow_new_cluster=allow_new_cluster),
+                    dtype=np.int64,
+                )
+                if warm_cands.size:
+                    numba_move_delta_batch(state, 0, warm_cands)
+            delta_fn = numba_move_delta_batch
+        except Exception:
+            delta_fn = lambda s, n, c: s.move_delta_batch(n, c)
+    else:
+        delta_fn = lambda s, n, c: s.move_delta_batch_hybrid(n, c, alpha)
 
     for _ in range(max_passes):
         changed = False
@@ -577,8 +674,17 @@ def multistart_incremental_se_heuristic(
     starts: int = 8,
     max_passes: int = 20,
     seed: int = 0,
+    alpha: float = 1.0,
 ) -> tuple[np.ndarray, float]:
-    """Run dependency-light scalable SE local search from several starts."""
+    """Run dependency-light scalable SE local search from several starts.
+
+    ``alpha`` (default 1.0) selects the local-move objective: 1.0 is
+    pure 2D structural entropy; 0.0 is pure modularity-maximising;
+    intermediate values use the convex blend
+    $\\alpha \\Delta H_2 + (1 - \\alpha)(-\\Delta Q)$.
+    The multistart minimum is always reported as 2D SE for
+    comparability across α.
+    """
 
     if isinstance(adj, SparseGraph):
         graph = adj
@@ -596,13 +702,28 @@ def multistart_incremental_se_heuristic(
 
     best_labels: np.ndarray | None = None
     best_entropy = float("inf")
+    pure_se = alpha >= 1.0 - 1e-12
     for i, labels in enumerate(seeds):
-        candidate_labels, entropy = multi_level_local_move(
-            graph,
-            init_labels=labels,
-            max_passes=max_passes,
-            seed=seed + i,
-        )
+        if pure_se:
+            candidate_labels, entropy = multi_level_local_move(
+                graph,
+                init_labels=labels,
+                max_passes=max_passes,
+                seed=seed + i,
+            )
+        else:
+            # Hybrid path: skip the multi-level coarsen (which is
+            # SE-specific) and just run a single-level local-move with
+            # the hybrid objective. Score the final partition with
+            # SE for comparability.
+            candidate_labels, _ = local_move_incremental(
+                graph,
+                init_labels=labels,
+                max_passes=max_passes,
+                seed=seed + i,
+                alpha=alpha,
+            )
+            entropy = float(IncrementalSEState(graph, candidate_labels).entropy)
         if entropy < best_entropy:
             best_entropy = entropy
             best_labels = candidate_labels
