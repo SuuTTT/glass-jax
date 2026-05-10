@@ -345,6 +345,103 @@ def _best_first_merge_via_beam(state: _LookaheadState, depth: int, width: int) -
 
 # ---------- TD bootstrap: rollout-policy lookahead ----------
 
+def merge_to_target_with_boltzmann(
+    adj,
+    base_labels: np.ndarray,
+    target_clusters: int,
+    n_schedules: int = 8,
+    T_max: float = 1.0,
+    T_min: float = 0.01,
+    seed: int = 0,
+) -> tuple[np.ndarray, float]:
+    r"""Stochastic annealed merge: Boltzmann-sample one merge per step.
+
+    Idea **B** in `_ideas_to_try.md` / item #6 in idealist. Pure
+    greedy is one of $O(K^2)$ local minima of the merge schedule;
+    multistart only randomises the *initial* partition, not the
+    merge sequence. Boltzmann sampling explores alternative merge
+    sequences:
+
+    At each merge step, score all active candidate pairs and
+    sample one by
+
+    $$P(\text{pair} = (i, j)) \propto \exp\!\bigl(-\Delta H_2(i, j) / T\bigr).$$
+
+    $T$ is annealed geometrically from ``T_max`` to ``T_min`` over
+    the merge schedule. ``n_schedules`` independent runs are
+    executed (each with its own RNG seed); the run with smallest
+    final 2D SE is returned.
+
+    Parameters
+    ----------
+    n_schedules : independent stochastic schedules to run; the best
+        by final SE is returned.
+    T_max, T_min : starting and ending temperatures. ``T_max=1.0``
+        means uniform-ish sampling early; ``T_min=0.01`` means
+        near-greedy late. With ``T_max=T_min=0`` the algorithm
+        recovers pure greedy.
+    """
+
+    if target_clusters < 1 or n_schedules < 1:
+        raise ValueError("target_clusters/n_schedules must be >= 1")
+    if T_max < 0 or T_min < 0:
+        raise ValueError("temperatures must be >= 0")
+
+    base_state, canonical = _initial_state(adj, base_labels)
+    rng_master = np.random.default_rng(seed)
+
+    best_labels: np.ndarray | None = None
+    best_entropy = float("inf")
+
+    for restart in range(n_schedules):
+        state = base_state.clone()
+        rng = np.random.default_rng(int(rng_master.integers(0, 2**31 - 1)))
+
+        # Number of merges this schedule will perform.
+        n_total = max(0, len(state.active) - target_clusters)
+        step = 0
+
+        while len(state.active) > target_clusters:
+            candidates = state.candidate_pairs() or state.all_active_pairs()
+            if not candidates:
+                break
+
+            # Geometric anneal from T_max to T_min over n_total steps.
+            if n_total <= 1:
+                T = max(T_min, 1e-12)
+            else:
+                frac = step / max(n_total - 1, 1)
+                T = max(T_max * (T_min / max(T_max, 1e-12)) ** frac, 1e-12)
+
+            deltas = np.array([state.merge_delta(i, j) for (i, j) in candidates])
+            # Numerical stability: subtract min before exp.
+            shifted = -(deltas - deltas.min()) / max(T, 1e-12)
+            # Cap to avoid overflow at very low T.
+            shifted = np.clip(shifted, -50.0, 50.0)
+            weights = np.exp(shifted)
+            total = float(weights.sum())
+            if total <= 1e-300 or not np.isfinite(total):
+                # Degenerate: fall back to greedy.
+                idx = int(np.argmin(deltas))
+            else:
+                probs = weights / total
+                idx = int(rng.choice(len(candidates), p=probs))
+
+            i, j = candidates[idx]
+            state.apply_merge(i, j)
+            step += 1
+
+        labels, entropy = _decode(state, canonical, adj)
+        if entropy < best_entropy:
+            best_entropy = entropy
+            best_labels = labels
+
+    if best_labels is None:
+        # Degenerate: no merges happened.
+        return _decode(base_state, canonical, adj)
+    return best_labels, best_entropy
+
+
 def merge_to_target_with_adaptive_td(
     adj,
     base_labels: np.ndarray,

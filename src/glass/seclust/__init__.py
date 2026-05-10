@@ -44,6 +44,7 @@ from .incremental import (
 )
 from .lookahead import (
     merge_to_target_with_adaptive_td,
+    merge_to_target_with_boltzmann,
     merge_to_target_with_hybrid_objective,
     merge_to_target_with_lookahead,
     merge_to_target_with_mpc,
@@ -86,6 +87,7 @@ __all__ = [
     "local_move_se_clustering",
     "local_move_incremental",
     "merge_to_target_with_adaptive_td",
+    "merge_to_target_with_boltzmann",
     "merge_to_target_with_hybrid_objective",
     "merge_to_target_with_lookahead",
     "merge_to_target_with_mpc",
