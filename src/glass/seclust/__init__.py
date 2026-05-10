@@ -42,6 +42,7 @@ from .incremental import (
     local_move_incremental,
     multistart_incremental_se_heuristic,
 )
+from .sync_kernel import synchronous_local_move
 from .lookahead import (
     merge_to_target_with_adaptive_td,
     merge_to_target_with_boltzmann,
@@ -105,5 +106,6 @@ __all__ = [
     "select_hierarchy_level",
     "sparse_structural_entropy",
     "structural_entropy",
+    "synchronous_local_move",
     "weighted_bridge_graph",
 ]
