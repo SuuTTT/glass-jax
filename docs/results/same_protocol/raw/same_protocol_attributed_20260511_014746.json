@@ -1,0 +1,96 @@
+{
+  "metadata": {
+    "block": "attributed",
+    "datasets": [
+      "Photo"
+    ],
+    "max_nodes": null,
+    "methods": [
+      "AdjSVDKMeans",
+      "GAE",
+      "SEClust-ConstrainedK"
+    ],
+    "neural_epochs": 10,
+    "platform": "Linux-6.5.0-41-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "quick": false,
+    "seeds": [
+      9
+    ],
+    "timestamp": "20260511_014746"
+  },
+  "rows": [
+    {
+      "acc": 0.3396078431372549,
+      "ari": 0.040960560808535655,
+      "block": "attributed",
+      "dataset": "Photo",
+      "embedding_dim": 32,
+      "map_equation": 11.686405759967283,
+      "mean_conductance": 0.38920091862589656,
+      "method": "AdjSVDKMeans",
+      "modularity": 0.3848124666346743,
+      "n_edges": 119081,
+      "n_nodes": 7650,
+      "nmi": 0.23919376514301327,
+      "peak_rss_mb": 872.7109375,
+      "pred_k": 8,
+      "runtime_seconds": 3.786144971847534,
+      "seed": 9,
+      "source": "torch_geometric",
+      "status": "ok",
+      "structural_entropy": 10.687222603937304,
+      "true_k": 8,
+      "wall_seconds_including_scoring": 5.24373984336853
+    },
+    {
+      "acc": 0.22954248366013072,
+      "ari": 0.022254103950943273,
+      "block": "attributed",
+      "dataset": "Photo",
+      "embedding_dim": 64,
+      "epochs": 10,
+      "map_equation": 13.392948142838282,
+      "mean_conductance": 0.8273504942178962,
+      "method": "GAE",
+      "modularity": 0.04017784576530545,
+      "n_edges": 119081,
+      "n_nodes": 7650,
+      "nmi": 0.057803689495606964,
+      "peak_rss_mb": 1295.32421875,
+      "pred_k": 8,
+      "runtime_seconds": 7.581968307495117,
+      "seed": 9,
+      "source": "torch_geometric",
+      "status": "ok",
+      "structural_entropy": 11.60790287410462,
+      "true_k": 8,
+      "wall_seconds_including_scoring": 8.172924280166626
+    },
+    {
+      "acc": 0.4550326797385621,
+      "ari": 0.28647011950138357,
+      "block": "attributed",
+      "dataset": "Photo",
+      "map_equation": 10.53688670310962,
+      "mean_conductance": 0.19144584877906992,
+      "method": "SEClust-ConstrainedK",
+      "modularity": 0.6567429811749319,
+      "n_edges": 119081,
+      "n_nodes": 7650,
+      "nmi": 0.3367756030775402,
+      "peak_rss_mb": 1295.32421875,
+      "pred_k": 8,
+      "runtime_seconds": 4.092650890350342,
+      "seclust_entropy": 9.837113246056889,
+      "seclust_passes": 4,
+      "seclust_starts": 2,
+      "seed": 9,
+      "source": "torch_geometric",
+      "status": "ok",
+      "structural_entropy": 9.837113246056928,
+      "true_k": 8,
+      "wall_seconds_including_scoring": 4.583716154098511
+    }
+  ]
+}

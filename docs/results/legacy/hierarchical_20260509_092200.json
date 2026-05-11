@@ -1,0 +1,111 @@
+[
+  {
+    "dataset": "Cora",
+    "method": "SEClust-Tree",
+    "n_levels": 429,
+    "K_finest": 429,
+    "K_coarsest": 1,
+    "SE_finest": 5.787326839546668,
+    "SE_coarsest": 10.89174392930757,
+    "dasgupta_cost": 3602428.0,
+    "dendrogram_purity": 0.2901184276900684,
+    "metric_seconds": 85.02637982368469,
+    "build_seconds": 79.71646928787231
+  },
+  {
+    "dataset": "Cora",
+    "method": "HCSE",
+    "n_levels": 2,
+    "K_finest": 2708,
+    "K_coarsest": 79,
+    "SE_finest": 10.891743929307616,
+    "SE_coarsest": 9.582715954463334,
+    "dasgupta_cost": 13966980.0,
+    "dendrogram_purity": 0.21196234056051833,
+    "metric_seconds": 1.3962249755859375,
+    "build_seconds": 13.105717658996582
+  },
+  {
+    "dataset": "Cora",
+    "method": "Louvain-Dendrogram",
+    "n_levels": 4,
+    "K_finest": 752,
+    "K_coarsest": 105,
+    "SE_finest": 6.204610633525265,
+    "SE_coarsest": 6.932165839798818,
+    "dasgupta_cost": 4112140.0,
+    "dendrogram_purity": 0.1800912417961112,
+    "metric_seconds": 1.3345954418182373,
+    "build_seconds": 0.3050825595855713
+  },
+  {
+    "dataset": "Citeseer",
+    "method": "SEClust-Tree",
+    "n_levels": 803,
+    "K_finest": 803,
+    "K_coarsest": 1,
+    "SE_finest": 4.745996540611648,
+    "SE_coarsest": 11.135768771466955,
+    "dasgupta_cost": 1238254.0,
+    "dendrogram_purity": 0.25837782508083257,
+    "metric_seconds": 171.12503218650818,
+    "build_seconds": 407.25623416900635
+  },
+  {
+    "dataset": "Citeseer",
+    "method": "HCSE",
+    "n_levels": 2,
+    "K_finest": 3327,
+    "K_coarsest": 438,
+    "SE_finest": 11.13576877146698,
+    "SE_coarsest": 8.905508775773148,
+    "dasgupta_cost": 15608700.0,
+    "dendrogram_purity": 0.11409349193131188,
+    "metric_seconds": 2.1339542865753174,
+    "build_seconds": 9.588069915771484
+  },
+  {
+    "dataset": "Citeseer",
+    "method": "Louvain-Dendrogram",
+    "n_levels": 4,
+    "K_finest": 1082,
+    "K_coarsest": 471,
+    "SE_finest": 5.233083872641837,
+    "SE_coarsest": 5.750196432801447,
+    "dasgupta_cost": 2041142.0,
+    "dendrogram_purity": 0.06798173872542473,
+    "metric_seconds": 2.038468360900879,
+    "build_seconds": 0.3196380138397217
+  },
+  {
+    "dataset": "Photo",
+    "method": "SEClust-Tree",
+    "n_levels": 306,
+    "K_finest": 306,
+    "K_coarsest": 1,
+    "SE_finest": 8.648627909915676,
+    "SE_coarsest": 12.130592481908941,
+    "dasgupta_cost": 192890742.0,
+    "dendrogram_purity": 0.5579165592720057,
+    "metric_seconds": 720.571795463562,
+    "build_seconds": 206.31814765930176
+  },
+  {
+    "dataset": "Photo",
+    "method": "HCSE",
+    "status": "skipped: dense N>5000"
+  },
+  {
+    "dataset": "Photo",
+    "method": "Louvain-Dendrogram",
+    "n_levels": 3,
+    "K_finest": 243,
+    "K_coarsest": 150,
+    "SE_finest": 8.845728159873225,
+    "SE_coarsest": 9.265562095238064,
+    "dasgupta_cost": 349482998.0,
+    "dendrogram_purity": 0.5023072723499659,
+    "metric_seconds": 9.457154750823975,
+    "build_seconds": 4.868349313735962
+  }
+]

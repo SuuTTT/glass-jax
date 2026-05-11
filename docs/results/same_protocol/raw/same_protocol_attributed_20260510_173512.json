@@ -1,0 +1,75 @@
+{
+  "metadata": {
+    "block": "attributed",
+    "datasets": [
+      "Cora"
+    ],
+    "max_nodes": null,
+    "methods": [
+      "DeepWalkKMeans",
+      "Node2VecKMeans"
+    ],
+    "neural_epochs": 200,
+    "platform": "Linux-6.5.0-41-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "quick": false,
+    "seeds": [
+      0
+    ],
+    "timestamp": "20260510_173512"
+  },
+  "rows": [
+    {
+      "acc": 0.5971196454948301,
+      "ari": 0.3142637915735926,
+      "block": "attributed",
+      "dataset": "Cora",
+      "embedding_dim": 128,
+      "epochs": 20,
+      "map_equation": 9.612835237133986,
+      "mean_conductance": 0.31479108709111275,
+      "method": "DeepWalkKMeans",
+      "modularity": 0.6219953818900651,
+      "n_edges": 5278,
+      "n_nodes": 2708,
+      "nmi": 0.381828662399033,
+      "p": 1.0,
+      "peak_rss_mb": 1473.41796875,
+      "pred_k": 7,
+      "q": 1.0,
+      "runtime_seconds": 112.92818546295166,
+      "seed": 0,
+      "source": "torch_geometric",
+      "status": "ok",
+      "structural_entropy": 8.889194264846111,
+      "true_k": 7,
+      "wall_seconds_including_scoring": 113.96286821365356
+    },
+    {
+      "acc": 0.5317577548005908,
+      "ari": 0.28796377189716993,
+      "block": "attributed",
+      "dataset": "Cora",
+      "embedding_dim": 128,
+      "epochs": 20,
+      "map_equation": 9.699042057358886,
+      "mean_conductance": 0.3231595444710322,
+      "method": "Node2VecKMeans",
+      "modularity": 0.6006253158060921,
+      "n_edges": 5278,
+      "n_nodes": 2708,
+      "nmi": 0.35158613600016275,
+      "p": 1.0,
+      "peak_rss_mb": 1487.23828125,
+      "pred_k": 7,
+      "q": 0.5,
+      "runtime_seconds": 116.72757744789124,
+      "seed": 0,
+      "source": "torch_geometric",
+      "status": "ok",
+      "structural_entropy": 8.927095911263818,
+      "true_k": 7,
+      "wall_seconds_including_scoring": 116.86668038368225
+    }
+  ]
+}

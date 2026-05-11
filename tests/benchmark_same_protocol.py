@@ -631,10 +631,22 @@ def run_label_propagation(case: DatasetCase, seed: int) -> tuple[np.ndarray, flo
 
 
 def run_kmeans(features, k: int, seed: int) -> tuple[np.ndarray, float]:
-    from sklearn.cluster import KMeans
+    from sklearn.cluster import KMeans, MiniBatchKMeans
 
     t0 = time.time()
-    labels = KMeans(n_clusters=k, n_init=20, random_state=seed).fit_predict(features)
+    x = np.asarray(features, dtype=np.float32)
+    if x.shape[0] > 10_000:
+        model = MiniBatchKMeans(
+            n_clusters=k,
+            n_init=3,
+            random_state=seed,
+            batch_size=8192,
+            max_iter=100,
+            reassignment_ratio=0.01,
+        )
+    else:
+        model = KMeans(n_clusters=k, n_init=20, random_state=seed)
+    labels = model.fit_predict(x)
     return labels.astype(np.int32), time.time() - t0
 
 

@@ -1,19 +1,19 @@
 {
   "metadata": {
     "block": "attributed",
-    "checkpoint": true,
     "datasets": [
       "Coauthor-CS",
       "Coauthor-Physics"
     ],
+    "max_nodes": null,
     "methods": [
       "RawKMeans",
       "PCAKMeans"
     ],
+    "neural_epochs": 200,
     "platform": "Linux-6.5.0-41-generic-x86_64-with-glibc2.39",
     "python": "3.12.3",
     "quick": false,
-    "rows_completed": 40,
     "seeds": [
       0,
       1,
@@ -25,7 +25,8 @@
       7,
       8,
       9
-    ]
+    ],
+    "timestamp": "20260511_100748"
   },
   "rows": [
     {

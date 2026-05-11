@@ -1,10 +1,10 @@
 {
   "metadata": {
     "block": "topology",
-    "checkpoint": true,
     "datasets": [
       "LFR"
     ],
+    "max_nodes": null,
     "methods": [
       "Louvain",
       "Leiden",
@@ -14,15 +14,16 @@
       "SEClust-ConstrainedK",
       "HCSE"
     ],
+    "neural_epochs": 200,
     "platform": "Linux-6.5.0-41-generic-x86_64-with-glibc2.39",
     "python": "3.12.3",
     "quick": false,
-    "rows_completed": 21,
     "seeds": [
       4,
       5,
       7
-    ]
+    ],
+    "timestamp": "20260511_074930"
   },
   "rows": [
     {
